@@ -1,15 +1,5 @@
 """
-BERT Code Module — Beta v3
-══════════════════════════════════════════════════════════════════════════════
-✅ File operations with safety checks
-✅ Unified diff display
-✅ Command execution with approval
-✅ Backup system
-✅ Tree view for directories
-✅ Better error handling and fallbacks
-✅ Integration with BERT CLI
-
-Goal: Match core Claude Code / Gemini CLI features for file editing
+BERT Code Module — Beta
 ══════════════════════════════════════════════════════════════════════════════
 """
 
