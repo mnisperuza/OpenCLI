@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "bert-cli"
 version = "1.0.0b"
-description = "Bert — A calm, local AI assistant by Biwa Industries"
+description = "Bert — A calm, local AI assistant by Biwa"
 readme = "README.md"
 license = {text = "Proprietary"}
 authors = [
