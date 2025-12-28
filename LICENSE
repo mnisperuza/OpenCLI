@@ -1,15 +1,15 @@
-BIWA INDUSTRIES PROPRIETARY LICENSE
+BIWA PROPRIETARY LICENSE
 
-Copyright (c) 2025 Biwa Industries
+Copyright (c) 2025 Biwa 
 
 All rights reserved.
 
 This software and associated documentation files (the "Software") are the
-proprietary property of Biwa Industries. The Software is provided for use
+proprietary property of Biwa. The Software is provided for use
 under the following terms:
 
 1. GRANT OF LICENSE
-   Biwa Industries grants you a non-exclusive, non-transferable, limited
+   Biwa grants you a non-exclusive, non-transferable, limited
    license to use the Software for personal, non-commercial purposes.
 
 2. RESTRICTIONS
@@ -25,7 +25,7 @@ under the following terms:
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-   BIWA INDUSTRIES BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+   BIWA BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
    WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
    OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
    SOFTWARE.
@@ -43,10 +43,10 @@ under the following terms:
 
 Bert CLI may reference, integrate, or interoperate with third-party technologies, including Hugging Face model families such as **Qwen** or more.
 
-All third-party technologies remain the property of their respective owners and are governed by their own licenses. Biwa Industries and its related projects make no claim of ownership over such third-party services. Nothing in this notice or any Biwa Industries license implies the transfer or assumption of rights regarding third-party intellectual property.
+All third-party technologies remain the property of their respective owners and are governed by their own licenses. Biwa and its related projects make no claim of ownership over such third-party services. Nothing in this notice or any Biwa license implies the transfer or assumption of rights regarding third-party intellectual property.
 
 
 For licensing inquiries: biwaindustries@gmail.com
 
-Biwa Industries
+Biwa
 2025
