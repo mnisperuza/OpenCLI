@@ -1,10 +1,10 @@
 """
-Bert CLI — A calm, local AI assistant by Biwa Industries
+Bert CLI — A calm, local AI assistant by Biwa
 Version 1.0.0b (Beta)
 """
 
 __version__ = "1.0.0b"
-__author__ = "Biwa Industries"
+__author__ = "Biwa"
 __email__ = "contact@biwaindustries.com"
 
 from bert.cli import main, BertCLI
