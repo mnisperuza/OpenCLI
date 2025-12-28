@@ -1,0 +1,26 @@
+# Bert CLI v1.0.0b — Dependencies
+# By Biwa Industries — 2025
+# Cross-platform: Windows, Linux, macOS
+
+# Core ML dependencies
+torch>=2.0.0
+transformers>=4.40.0
+accelerate>=0.27.0
+
+# Model downloading (HuggingFace)
+huggingface-hub>=0.20.0
+hf_xet>=1.1.0  # Fast model downloads
+safetensors>=0.4.0
+
+# Utilities
+numpy>=1.24.0,<2.0.0
+
+# Quantization support
+# - Linux/WSL: Full support with bitsandbytes
+# - Windows: Limited support (use fp16 or install via conda)
+bitsandbytes>=0.43.0;
+
+# Web search (optional)
+# duckduckgo-search>=6.0.0
+# requests>=2.31.0
+# beautifulsoup4>=4.12.0

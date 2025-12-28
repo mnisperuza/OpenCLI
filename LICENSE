@@ -1,0 +1,52 @@
+BIWA INDUSTRIES PROPRIETARY LICENSE
+
+Copyright (c) 2025 Biwa Industries
+
+All rights reserved.
+
+This software and associated documentation files (the "Software") are the
+proprietary property of Biwa Industries. The Software is provided for use
+under the following terms:
+
+1. GRANT OF LICENSE
+   Biwa Industries grants you a non-exclusive, non-transferable, limited
+   license to use the Software for personal, non-commercial purposes.
+
+2. RESTRICTIONS
+   You may not:
+   - Modify, adapt, or create derivative works of the Software
+   - Distribute, sublicense, lease, rent, or sell the Software
+   - Reverse engineer, decompile, or disassemble the Software
+   - Remove or alter any proprietary notices or labels on the Software
+   - Use the Software for commercial purposes without written permission
+   - Claim ownership of the software or represent it as your own work
+
+3. DISCLAIMER
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+   OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   BIWA INDUSTRIES BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+   WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF
+   OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+4. TERMINATION
+   This license is effective until terminated. It will terminate automatically
+   if you fail to comply with any term of this license.
+
+5. BETA SOFTWARE
+   This is beta software. Features, functionality, and stability may change
+   without notice.
+
+
+6. THIRD PARTIES 
+
+Bert CLI may reference, integrate, or interoperate with third-party technologies, including Hugging Face model families such as **Qwen** or more.
+
+All third-party technologies remain the property of their respective owners and are governed by their own licenses. Biwa Industries and its related projects make no claim of ownership over such third-party services. Nothing in this notice or any Biwa Industries license implies the transfer or assumption of rights regarding third-party intellectual property.
+
+
+For licensing inquiries: contact@biwaindustries.com
+
+Biwa Industries
+2025
