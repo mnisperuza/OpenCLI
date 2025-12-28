@@ -9,7 +9,7 @@ description = "Bert — A calm, local AI assistant by Biwa Industries"
 readme = "README.md"
 license = {text = "Proprietary"}
 authors = [
-    {name = "Biwa Industries", email = "biwaindustries@gmail.com"}
+    {name = "Biwa", email = "biwaindustries@gmail.com"}
 ]
 requires-python = ">=3.8"
 classifiers = [
