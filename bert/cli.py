@@ -1,14 +1,6 @@
 """
 BERT CLI v1.0.0b (Beta)
 ══════════════════════════════════════════════════════════════════════════════
-✅ 4 main models + 1 coder (all Qwen)
-✅ Gradient system: Sage, Teal, Sage-Olive, Orange-Coral, Silver
-✅ Animated BERT CLI banner
-✅ Fast braille spinner
-✅ Quantization picker
-✅ Error logging to ~/.bert/errors.log
-✅ Uninstall command: bert --del
-
 Models:
   bert nano  → Qwen2.5-0.5B-Instruct (default, fastest)
   bert mini  → Qwen2.5-1.5B-Instruct
