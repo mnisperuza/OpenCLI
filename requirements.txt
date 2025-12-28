@@ -1,5 +1,5 @@
 # Bert CLI v1.0.0b — Dependencies
-# By Biwa Industries — 2025
+# By Biwa — 2025
 # Cross-platform: Windows, Linux, macOS
 
 # Core ML dependencies

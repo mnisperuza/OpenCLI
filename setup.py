@@ -31,7 +31,7 @@ setup(
     description="Bert — A calm, local AI assistant by Biwa Industries",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Biwa Industries",
+    author="Biwa",
     author_email="biwaindustries@gmail.com",
     url="https://github.com/mnisperuza/bert-cli",
     project_urls={
