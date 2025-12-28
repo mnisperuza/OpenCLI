@@ -28,7 +28,7 @@ install_requires = [
 setup(
     name="bert-cli",
     version="1.0.0b",
-    description="Bert — A calm, local AI assistant by Biwa Industries",
+    description="Bert — A calm, local AI assistant by Biwa",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Biwa",
