@@ -16,7 +16,7 @@ Models:
   bert max   → Qwen3-4B (most capable)
   bert coder → Qwen2.5-Coder-1.5B-Instruct
 
-By Biwa Industries — 2025
+By Biwa — 2025
 ══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -319,7 +319,7 @@ class BertCLI:
         animate_banner(centered_lines, duration=1.8)
         
         print()
-        print(f"{Colors.DIM}{'by Biwa Industries — 2025'.center(width)}{Colors.RESET}")
+        print(f"{Colors.DIM}{'by Biwa — 2025'.center(width)}{Colors.RESET}")
         print(f"{Colors.DIM}{f'Version {self.VERSION} ({self.VERSION_NAME})'.center(width)}{Colors.RESET}")
         print()
     
@@ -815,7 +815,7 @@ def show_version():
     """Show version info"""
     print(f"\n{Colors.DIM}Bert CLI{Colors.RESET}")
     print(f"Version: {BertCLI.VERSION} ({BertCLI.VERSION_NAME})")
-    print(f"By Biwa Industries — 2025\n")
+    print(f"By Biwa — 2025\n")
 
 
 def show_info():
@@ -823,12 +823,12 @@ def show_info():
     print(f"""
 {Colors.DIM}{'═' * 50}{Colors.RESET}
   {Colors.BOLD}BERT CLI{Colors.RESET}
-  A calm, local AI assistant by Biwa Industries
+  A calm, local AI assistant by Biwa
 {Colors.DIM}{'═' * 50}{Colors.RESET}
 
   Version:  {BertCLI.VERSION} ({BertCLI.VERSION_NAME})
   Models:   Qwen 2.5 & Qwen 3 family
-  License:  Proprietary (Biwa Industries)
+  License:  Proprietary (Biwa)
   
   GitHub:   github.com/mnisperuza/bert-cli
   Support:  contact: biwaindustries@gmail.com
