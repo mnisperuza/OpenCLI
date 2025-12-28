@@ -9,7 +9,7 @@ description = "Bert — A calm, local AI assistant by Biwa Industries"
 readme = "README.md"
 license = {text = "Proprietary"}
 authors = [
-    {name = "Biwa Industries", email = "contact@biwaindustries.com"}
+    {name = "Biwa Industries", email = "biwaindustries@gmail.com"}
 ]
 requires-python = ">=3.8"
 classifiers = [
@@ -54,10 +54,10 @@ web = [
 bert = "bert.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/BiwaIndustries/bert-cli"
-Documentation = "https://github.com/BiwaIndustries/bert-cli#readme"
-Repository = "https://github.com/BiwaIndustries/bert-cli"
-Issues = "https://github.com/BiwaIndustries/bert-cli/issues"
+Homepage = "https://github.com/mnisperuza/bert-cli"
+Documentation = "https://github.com/mnisperuza/bert-cli#readme"
+Repository = "https://github.com/mnisperuza/bert-cli"
+Issues = "https://github.com/mnisperuza/bert-cli/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
