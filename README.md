@@ -29,6 +29,10 @@ This is **Proprietary Software**. All rights are reserved by Biwa Industries.
 Bert is designed as a reliable AI assistant, something you can always rely on, you can see Bert as a Friend, as a service, as a companion, or as something else that you could value.
 
 Bert has no fees, no limits, but ,he always wants to help, currently Bert has only his CLI incorporation, In beta phase, but we are expecting to develop a webpage where you can claim **your own token** which gives you access to Bert CLI and More, in a not so distant future, and also, we are expecting to get Bert a more solid version in *early-mid 2026*.
+
+<p align="center">
+  <img src="assets/preview.png" alt="Bert CLI Preview" width="500">
+</p>
  
 **Models:**
 - **Bert Nano** — Qwen2.5-0.5B (fastest, default) -  *2000 Tokens per answer*
