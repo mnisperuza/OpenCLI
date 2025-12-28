@@ -138,7 +138,8 @@ bert --del
 
 ## Support
 
-- **GitHub Issues**: [github.com/BiwaIndustries/bert-cli/issues](https://github.com/mnisperuza/bert-cli/issues)
+- **GitHub Issues**: [github.com/mnisperuza/bert-cli/issues](https://github.com/mnisperuza/bert-cli/issues)
+
 - **Email**: biwaindustries@gmail.com
 
 When reporting issues, include:
