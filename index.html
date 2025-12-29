@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bert CLI — A Calm, Local AI Assistant</title>
+    <meta name="description" content="Bert is a local AI assistant that runs entirely on your machine. No cloud, no API keys, no data leaving your computer.">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 400 400' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816' stroke='%235F6F64' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --sage-dark: #5F6F64;
+            --sage-mid: #8FA79A;
+            --sage-light: #96C3A3;
+            --sage-pale: #C4D9C8;
+            --bone: #F5F3EE;
+            --bone-dark: #E8E5DE;
+            --cosmic: #0E1110;
+            --charcoal: #2F3330;
+            --success: #4A7C59;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        
+        body {
+            font-family: 'Fraunces', Georgia, serif;
+            background: var(--bone);
+            color: var(--charcoal);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0.025;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            z-index: 1000;
+        }
+        
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 1.25rem 4rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(245, 243, 238, 0.92);
+            backdrop-filter: blur(12px);
+            z-index: 100;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            text-decoration: none;
+            color: var(--sage-dark);
+        }
+        
+        .logo-icon { width: 26px; height: 26px; }
+        
+        .logo-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2.5rem;
+            list-style: none;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--charcoal);
+            font-size: 0.9rem;
+            opacity: 0.65;
+            transition: opacity 0.2s;
+        }
+        
+        .nav-links a:hover { opacity: 1; }
+        
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 8rem 2rem 4rem;
+            position: relative;
+        }
+        
+        .hero-bg {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: 
+                radial-gradient(ellipse at 20% 80%, rgba(150, 195, 163, 0.12) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(143, 167, 154, 0.08) 0%, transparent 40%);
+            z-index: -1;
+        }
+        
+        .spiral-link {
+            display: block;
+            width: 140px;
+            height: 140px;
+            margin-bottom: 2.5rem;
+            animation: float 6s ease-in-out infinite;
+            color: var(--sage-dark);
+            transition: transform 0.3s ease;
+        }
+        
+        .spiral-link:hover {
+            transform: scale(1.05);
+        }
+        
+        .spiral-logo {
+            width: 100%;
+            height: 100%;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-12px) rotate(2deg); }
+        }
+        
+        .hero h1 {
+            font-size: clamp(3rem, 8vw, 5rem);
+            font-weight: 300;
+            letter-spacing: -0.03em;
+            color: var(--sage-dark);
+            margin-bottom: 1.25rem;
+            line-height: 1.1;
+        }
+        
+        .hero h1 span {
+            font-weight: 500;
+            font-style: italic;
+        }
+        
+        .hero-tagline {
+            font-size: 1.25rem;
+            color: var(--sage-mid);
+            max-width: 480px;
+            margin-bottom: 2.5rem;
+        }
+        
+        .hero-cta {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .btn {
+            padding: 0.9rem 1.8rem;
+            border-radius: 100px;
+            text-decoration: none;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: var(--sage-dark);
+            color: var(--bone);
+            border: 2px solid var(--sage-dark);
+        }
+        
+        .btn-primary:hover {
+            background: var(--charcoal);
+            border-color: var(--charcoal);
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: var(--sage-dark);
+            border: 2px solid var(--sage-mid);
+        }
+        
+        .btn-secondary:hover {
+            border-color: var(--sage-dark);
+            background: rgba(95, 111, 100, 0.05);
+        }
+        
+        /* Features */
+        .features {
+            padding: 7rem 4rem;
+            background: var(--bone-dark);
+        }
+        
+        .section-title {
+            text-align: center;
+            font-size: 2.25rem;
+            font-weight: 400;
+            color: var(--sage-dark);
+            margin-bottom: 3.5rem;
+            letter-spacing: -0.02em;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 1.5rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        
+        .feature-card {
+            background: var(--bone);
+            padding: 2rem;
+            border-radius: 14px;
+            border: 1px solid rgba(95, 111, 100, 0.08);
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 16px 32px rgba(47, 51, 48, 0.06);
+        }
+        
+        .feature-icon { font-size: 1.75rem; margin-bottom: 0.75rem; }
+        
+        .feature-card h3 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 0.5rem;
+        }
+        
+        .feature-card p {
+            color: var(--charcoal);
+            opacity: 0.7;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+        
+        /* Install */
+        .install {
+            padding: 7rem 4rem;
+            max-width: 850px;
+            margin: 0 auto;
+        }
+        
+        .install-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 1.75rem;
+        }
+        
+        .step {
+            display: flex;
+            gap: 1.25rem;
+            align-items: flex-start;
+        }
+        
+        .step-number {
+            width: 44px;
+            height: 44px;
+            background: var(--sage-light);
+            color: var(--charcoal);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            flex-shrink: 0;
+            font-family: 'Source Code Pro', monospace;
+        }
+        
+        .step-content h3 {
+            font-size: 1.05rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 0.4rem;
+        }
+        
+        .step-content p {
+            color: var(--charcoal);
+            opacity: 0.7;
+            margin-bottom: 0.75rem;
+            font-size: 0.9rem;
+        }
+        
+        .code-wrapper {
+            display: flex;
+            align-items: stretch;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        .code-block {
+            flex: 1;
+            background: var(--cosmic);
+            color: var(--sage-light);
+            padding: 1rem 1.25rem;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+        }
+        
+        .code-block::before {
+            content: '$ ';
+            color: var(--sage-mid);
+            opacity: 0.6;
+            margin-right: 0.5rem;
+        }
+        
+        .copy-btn {
+            background: rgba(150, 195, 163, 0.15);
+            border: none;
+            color: var(--sage-light);
+            padding: 0 1rem;
+            cursor: pointer;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.75rem;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            white-space: nowrap;
+        }
+        
+        .copy-btn:hover { background: rgba(150, 195, 163, 0.25); }
+        
+        /* Models */
+        .models {
+            padding: 7rem 4rem;
+            background: var(--sage-dark);
+            color: var(--bone);
+        }
+        
+        .models .section-title { color: var(--bone); }
+        
+        .models-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.25rem;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        
+        .model-card {
+            background: rgba(245, 243, 238, 0.06);
+            padding: 1.75rem;
+            border-radius: 14px;
+            border: 1px solid rgba(245, 243, 238, 0.08);
+            transition: all 0.3s ease;
+        }
+        
+        .model-card:hover {
+            background: rgba(245, 243, 238, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .model-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+        
+        .model-name { font-size: 1.15rem; font-weight: 500; }
+        
+        .model-badge {
+            padding: 0.2rem 0.6rem;
+            border-radius: 100px;
+            font-size: 0.7rem;
+            font-family: 'Source Code Pro', monospace;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        
+        .badge-nano { background: rgba(150, 195, 165, 0.25); color: #C4E8D1; }
+        .badge-mini { background: rgba(75, 205, 170, 0.25); color: #A0E8D4; }
+        .badge-main { background: rgba(148, 182, 120, 0.25); color: #C8E0B0; }
+        .badge-max { background: rgba(245, 160, 107, 0.25); color: #F5C7A9; }
+        .badge-coder { background: rgba(200, 210, 220, 0.25); color: #D8E0E8; }
+        .badge-maxcoder { background: rgba(180, 180, 180, 0.25); color: #D0D0D0; }
+        
+        .model-base {
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.75rem;
+            opacity: 0.5;
+            margin-bottom: 0.75rem;
+        }
+        
+        .model-desc {
+            font-size: 0.9rem;
+            opacity: 0.75;
+            line-height: 1.55;
+        }
+        
+        /* Tokens */
+        .tokens {
+            padding: 7rem 4rem;
+            text-align: center;
+        }
+        
+        .token-container { max-width: 550px; margin: 0 auto; }
+        
+        .token-box {
+            background: linear-gradient(145deg, var(--sage-pale) 0%, var(--bone-dark) 100%);
+            padding: 2.5rem;
+            border-radius: 20px;
+            border: 2px solid var(--sage-mid);
+            margin-bottom: 2rem;
+        }
+        
+        .token-box h3 {
+            font-size: 1.5rem;
+            color: var(--sage-dark);
+            margin-bottom: 0.75rem;
+        }
+        
+        .token-amount {
+            font-size: 3rem;
+            font-weight: 600;
+            color: var(--sage-dark);
+            font-family: 'Source Code Pro', monospace;
+            margin-bottom: 0.25rem;
+        }
+        
+        .token-period {
+            font-size: 1rem;
+            color: var(--sage-mid);
+            margin-bottom: 1.75rem;
+        }
+        
+        .token-features {
+            list-style: none;
+            text-align: left;
+            margin-bottom: 1.75rem;
+        }
+        
+        .token-features li {
+            padding: 0.4rem 0;
+            color: var(--charcoal);
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            font-size: 0.9rem;
+        }
+        
+        .token-features li::before {
+            content: '✓';
+            color: var(--sage-dark);
+            font-weight: bold;
+        }
+        
+        .claim-form {
+            background: var(--bone);
+            padding: 2rem;
+            border-radius: 16px;
+            border: 1px solid rgba(95, 111, 100, 0.15);
+            text-align: left;
+        }
+        
+        .claim-form h4 {
+            font-size: 1.1rem;
+            color: var(--sage-dark);
+            margin-bottom: 1.25rem;
+            text-align: center;
+        }
+        
+        .form-group { margin-bottom: 1.25rem; }
+        
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--charcoal);
+            margin-bottom: 0.4rem;
+            font-weight: 500;
+        }
+        
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border: 2px solid rgba(95, 111, 100, 0.2);
+            border-radius: 8px;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.9rem;
+            background: var(--bone);
+            color: var(--charcoal);
+            transition: border-color 0.2s;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--sage-dark);
+        }
+        
+        .form-group textarea {
+            min-height: 80px;
+            resize: vertical;
+            font-family: 'Fraunces', Georgia, serif;
+        }
+        
+        .form-group small {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--charcoal);
+            opacity: 0.5;
+            margin-top: 0.3rem;
+        }
+        
+        .claim-btn {
+            width: 100%;
+            padding: 1rem;
+            justify-content: center;
+            font-size: 0.9rem;
+        }
+        
+        .token-result {
+            display: none;
+            margin-top: 1.5rem;
+            padding: 1.5rem;
+            background: rgba(74, 124, 89, 0.1);
+            border: 2px solid var(--success);
+            border-radius: 12px;
+            text-align: center;
+        }
+        
+        .token-result.show {
+            display: block;
+            animation: slideIn 0.4s ease;
+        }
+        
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .token-result h5 {
+            color: var(--success);
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .generated-token {
+            font-family: 'Source Code Pro', monospace;
+            font-size: 1.1rem;
+            background: var(--cosmic);
+            color: var(--sage-light);
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.75rem;
+            word-break: break-all;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .generated-token:hover { background: #1a1d1a; }
+        
+        .token-result small {
+            font-size: 0.8rem;
+            color: var(--charcoal);
+            opacity: 0.6;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 3.5rem 4rem;
+            background: var(--cosmic);
+            color: var(--bone);
+            text-align: center;
+        }
+        
+        .footer-brand {
+            margin-bottom: 1rem;
+        }
+        
+        .footer-brand a {
+            color: var(--bone);
+            text-decoration: none;
+            font-size: 1.1rem;
+            font-weight: 500;
+            opacity: 0.9;
+            transition: opacity 0.2s;
+        }
+        
+        .footer-brand a:hover { opacity: 1; }
+        
+        .footer-text { opacity: 0.5; font-size: 0.85rem; }
+        
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.25rem;
+        }
+        
+        .footer-links a {
+            color: var(--sage-light);
+            text-decoration: none;
+            font-size: 0.85rem;
+            opacity: 0.6;
+            transition: opacity 0.2s;
+        }
+        
+        .footer-links a:hover { opacity: 1; }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            nav { padding: 1rem 1.5rem; }
+            .nav-links { display: none; }
+            .hero, .features, .install, .models, .tokens { padding: 4rem 1.5rem; }
+            .hero h1 { font-size: 2.5rem; }
+            .step { flex-direction: column; gap: 0.75rem; }
+            .token-box, .claim-form { padding: 1.5rem; }
+            .code-wrapper { flex-direction: column; }
+            .copy-btn { padding: 0.75rem; justify-content: center; }
+            footer { padding: 2.5rem 1.5rem; }
+            .footer-links { gap: 1.5rem; flex-wrap: wrap; }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .hero h1, .hero-tagline, .hero-cta { animation: fadeInUp 0.8s ease forwards; }
+        .hero-tagline { animation-delay: 0.1s; }
+        .hero-cta { animation-delay: 0.2s; }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <a href="https://github.com/mnisperuza/bert-cli" class="logo">
+            <!-- Spiral Logo -->
+            <svg class="logo-icon" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816" stroke="currentColor" stroke-opacity="0.9" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="logo-text">Bert CLI</span>
+        </a>
+        <ul class="nav-links">
+            <li><a href="#features">Features</a></li>
+            <li><a href="#install">Install</a></li>
+            <li><a href="#models">Models</a></li>
+            <li><a href="#tokens">Get Tokens</a></li>
+            <li><a href="https://github.com/mnisperuza/bert-cli">GitHub</a></li>
+        </ul>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-bg"></div>
+        <!-- Clickable Galaxy Spiral Logo -->
+        <a href="https://github.com/mnisperuza/bert-cli" class="spiral-link" title="View on GitHub">
+            <svg class="spiral-logo" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816" stroke="currentColor" stroke-opacity="0.9" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+        </a>
+        <h1>Meet <span>Bert</span></h1>
+        <p class="hero-tagline">A calm, local AI assistant that runs entirely on your machine. No cloud. No tracking. Just you and Bert.</p>
+        <div class="hero-cta">
+            <a href="#install" class="btn btn-primary">Get Started →</a>
+            <a href="#tokens" class="btn btn-secondary">Claim Free Tokens</a>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section class="features" id="features">
+        <h2 class="section-title">Why Bert?</h2>
+        <div class="features-grid">
+            <div class="feature-card">
+                <div class="feature-icon">🔒</div>
+                <h3>100% Local</h3>
+                <p>Your conversations never leave your machine. No cloud APIs, no data collection.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⚡</div>
+                <h3>Fast & Lightweight</h3>
+                <p>Optimized models from 350M to 3B parameters. Runs smoothly on consumer hardware.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎨</div>
+                <h3>Beautiful CLI</h3>
+                <p>Animated gradients, braille spinners, and a calm sage-green aesthetic.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">💻</div>
+                <h3>Code-First</h3>
+                <p>Bert Coder mode with file editing, syntax highlighting, and code assistance.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🧠</div>
+                <h3>Smart Memory</h3>
+                <p>Auto-compress context with intelligent milestone saving. Bert remembers.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌍</div>
+                <h3>Cross-Platform</h3>
+                <p>Windows, Linux, and macOS. One pip install and you're ready.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Install -->
+    <section class="install" id="install">
+        <h2 class="section-title">Get Started in 60 Seconds</h2>
+        <div class="install-steps">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-content">
+                    <h3>Install Bert</h3>
+                    <p>One command to install everything you need.</p>
+                    <div class="code-wrapper">
+                        <div class="code-block"><span>pip install bert-cli</span></div>
+                        <button class="copy-btn" onclick="copyCode(this, 'pip install bert-cli')">Copy</button>
+                    </div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-content">
+                    <h3>Claim Your Token</h3>
+                    <p>Get 20,000 free tokens weekly — <a href="#tokens" style="color: var(--sage-dark);">claim below</a>.</p>
+                    <div class="code-wrapper">
+                        <div class="code-block"><span>bert --token YOUR-TOKEN-HERE</span></div>
+                        <button class="copy-btn" onclick="copyCode(this, 'bert --token YOUR-TOKEN-HERE')">Copy</button>
+                    </div>
+                </div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-content">
+                    <h3>Launch Bert</h3>
+                    <p>Start chatting with your local AI assistant.</p>
+                    <div class="code-wrapper">
+                        <div class="code-block"><span>bert</span></div>
+                        <button class="copy-btn" onclick="copyCode(this, 'bert')">Copy</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Models -->
+    <section class="models" id="models">
+        <h2 class="section-title">Choose Your Bert</h2>
+        <div class="models-grid">
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Nano</span>
+                    <span class="model-badge badge-nano">Fastest</span>
+                </div>
+                <div class="model-base">LiquidAI/LFM2-350M</div>
+                <p class="model-desc">2-3× faster than alternatives. Optimized for edge & real-time use on CPU/NPU.</p>
+            </div>
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Mini</span>
+                    <span class="model-badge badge-mini">Balanced</span>
+                </div>
+                <div class="model-base">LiquidAI/LFM2-1.2B</div>
+                <p class="model-desc">Excellent instruction following with strong reasoning.</p>
+            </div>
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Main</span>
+                    <span class="model-badge badge-main">Flagship</span>
+                </div>
+                <div class="model-base">Yi-Coder-1.5B</div>
+                <p class="model-desc">Balanced coding & text with 128K context window.</p>
+            </div>
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Max</span>
+                    <span class="model-badge badge-max">Powerful</span>
+                </div>
+                <div class="model-base">LiquidAI/LFM2-2.6B</div>
+                <p class="model-desc">PhD-level reasoning with top-tier benchmarks.</p>
+            </div>
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Coder</span>
+                    <span class="model-badge badge-coder">Code</span>
+                </div>
+                <div class="model-base">DeepSeek-Coder-1.3B</div>
+                <p class="model-desc">Fast, accurate code generation. 16K context.</p>
+            </div>
+            <div class="model-card">
+                <div class="model-header">
+                    <span class="model-name">Bert Max-Coder</span>
+                    <span class="model-badge badge-maxcoder">Heavy Code</span>
+                </div>
+                <div class="model-base">StabilityAI/Stable-Code-3B</div>
+                <p class="model-desc">Heavy coding workloads, multi-language support.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tokens -->
+    <section class="tokens" id="tokens">
+        <h2 class="section-title">Claim Free Tokens</h2>
+        <div class="token-container">
+            <div class="token-box">
+                <h3>Weekly Token Allocation</h3>
+                <div class="token-amount">20,000</div>
+                <div class="token-period">tokens per week • completely free</div>
+                <ul class="token-features">
+                    <li>Use any model in the Bert family</li>
+                    <li>No credit card required</li>
+                    <li>Resets every week</li>
+                    <li>Help Bert grow with your feedback</li>
+                </ul>
+            </div>
+            
+            <div class="claim-form">
+                <h4>🎫 Generate Your Token Key</h4>
+                <form id="tokenForm" onsubmit="generateToken(event)">
+                    <div class="form-group">
+                        <label for="email">Email Address</label>
+                        <input type="email" id="email" placeholder="you@example.com" required>
+                        <small>Used to generate your unique token. We don't store this.</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="feedback">Quick Feedback (Optional)</label>
+                        <textarea id="feedback" placeholder="What would you like to see in Bert? Any bugs or suggestions?"></textarea>
+                        <small>Help us improve! Your feedback shapes Bert's future.</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary claim-btn">Generate Token Key →</button>
+                </form>
+                
+                <div class="token-result" id="tokenResult">
+                    <h5>✓ Your Token Key</h5>
+                    <div class="generated-token" id="generatedToken" onclick="copyToken()">BERT-XXXX-XXXX-XXXX-0128</div>
+                    <small>Click to copy • Valid for 7 days • Paste in Bert CLI</small>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-brand">
+            <a href="https://github.com/mnisperuza/biwa-Biwa">Biwa</a>
+        </div>
+        <p class="footer-text">Built with restraint and long-term intent.</p>
+        <div class="footer-links">
+            <a href="https://github.com/mnisperuza/bert-cli">GitHub</a>
+            <a href="mailto:biwaindustries@gmail.com">Contact</a>
+        </div>
+        <p class="footer-text" style="margin-top: 1.5rem; opacity: 0.35;">© 2025 Biwa. All rights reserved.</p>
+    </footer>
+
+    <script>
+        function copyCode(btn, code) {
+            navigator.clipboard.writeText(code);
+            btn.textContent = 'Copied!';
+            setTimeout(() => btn.textContent = 'Copy', 2000);
+        }
+        
+        function generateToken(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value.trim();
+            if (!email) return;
+            
+            const token = createToken(email);
+            document.getElementById('generatedToken').textContent = token;
+            document.getElementById('tokenResult').classList.add('show');
+            document.getElementById('tokenResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        
+        function createToken(email) {
+            let hash = 0;
+            for (let i = 0; i < email.length; i++) {
+                hash = ((hash << 5) - hash) + email.charCodeAt(i);
+                hash = hash & hash;
+            }
+            hash = Math.abs(hash);
+            
+            const now = new Date();
+            const start = new Date(now.getFullYear(), 0, 1);
+            const week = Math.ceil((((now - start) / 86400000) + start.getDay() + 1) / 7);
+            const weekStr = week.toString().padStart(2, '0');
+            
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            const p1 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 5)) % chars.length]).join('');
+            const p2 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 3 + 7)) % chars.length]).join('');
+            const p3 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 4 + 11)) % chars.length]).join('');
+            const checksum = ((hash % 89) + 10).toString();
+            
+            return `BERT-${p1}-${p2}-${p3}-${weekStr}${checksum}`;
+        }
+        
+        function copyToken() {
+            const token = document.getElementById('generatedToken').textContent;
+            navigator.clipboard.writeText(token);
+            const el = document.getElementById('generatedToken');
+            const original = el.textContent;
+            el.textContent = '✓ Copied to clipboard!';
+            setTimeout(() => el.textContent = original, 1500);
+        }
+        
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function(e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
+        });
+    </script>
+</body>
+</html>
