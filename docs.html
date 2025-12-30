@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bert CLI — Documentation</title>
+    <meta name="description" content="Complete documentation for Bert CLI. Learn commands, tips, and model capabilities.">
+    
+    <!-- Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 400 400' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816' stroke='%235F6F64' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --sage-dark: #5F6F64;
+            --sage-mid: #8FA79A;
+            --sage-light: #96C3A3;
+            --sage-pale: #C4D9C8;
+            --bone: #F5F3EE;
+            --bone-dark: #E8E5DE;
+            --cosmic: #0E1110;
+            --charcoal: #2F3330;
+            --success: #4A7C59;
+            --coral: #E8A87C;
+            --cyan: #7ECCC0;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        
+        body {
+            font-family: 'Fraunces', Georgia, serif;
+            background: var(--bone);
+            color: var(--charcoal);
+            line-height: 1.7;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0.025;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            z-index: 1000;
+        }
+        
+        /* Navigation */
+        nav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 1.25rem 4rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(245, 243, 238, 0.92);
+            backdrop-filter: blur(12px);
+            z-index: 100;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            text-decoration: none;
+            color: var(--sage-dark);
+        }
+        
+        .logo-icon { width: 26px; height: 26px; }
+        
+        .logo-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+            letter-spacing: -0.02em;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 2.5rem;
+            list-style: none;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--charcoal);
+            font-size: 0.9rem;
+            opacity: 0.65;
+            transition: opacity 0.2s;
+        }
+        
+        .nav-links a:hover { opacity: 1; }
+        .nav-links a.active { opacity: 1; color: var(--sage-dark); font-weight: 500; }
+        
+        /* Main Content */
+        main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 8rem 2rem 4rem;
+        }
+        
+        /* Header */
+        .docs-header {
+            text-align: center;
+            margin-bottom: 4rem;
+            padding-bottom: 3rem;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.15);
+        }
+        
+        .docs-header h1 {
+            font-size: 3rem;
+            font-weight: 300;
+            color: var(--sage-dark);
+            margin-bottom: 1rem;
+            letter-spacing: -0.02em;
+        }
+        
+        .docs-header p {
+            font-size: 1.1rem;
+            opacity: 0.7;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        /* Table of Contents */
+        .toc {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 4rem;
+            box-shadow: 0 2px 20px rgba(95, 111, 100, 0.08);
+        }
+        
+        .toc h2 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .toc ul {
+            list-style: none;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 0.75rem;
+        }
+        
+        .toc a {
+            display: block;
+            padding: 0.5rem 0;
+            color: var(--charcoal);
+            text-decoration: none;
+            font-size: 0.95rem;
+            opacity: 0.7;
+            transition: all 0.2s;
+        }
+        
+        .toc a:hover {
+            opacity: 1;
+            color: var(--sage-dark);
+            transform: translateX(4px);
+        }
+        
+        .toc a::before {
+            content: '→ ';
+            opacity: 0.4;
+        }
+        
+        /* Sections */
+        section {
+            margin-bottom: 4rem;
+        }
+        
+        section h2 {
+            font-size: 1.75rem;
+            font-weight: 400;
+            color: var(--sage-dark);
+            margin-bottom: 1.5rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 2px solid var(--sage-pale);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        section h3 {
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: var(--charcoal);
+            margin: 2rem 0 1rem;
+        }
+        
+        section p {
+            margin-bottom: 1rem;
+            opacity: 0.85;
+        }
+        
+        /* Code blocks */
+        code {
+            font-family: 'Source Code Pro', monospace;
+            background: rgba(95, 111, 100, 0.1);
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        
+        pre {
+            background: var(--cosmic);
+            color: var(--sage-pale);
+            padding: 1.5rem;
+            border-radius: 12px;
+            overflow-x: auto;
+            margin: 1.5rem 0;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+        
+        /* Command table */
+        .command-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5rem 0;
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 20px rgba(95, 111, 100, 0.08);
+        }
+        
+        .command-table th,
+        .command-table td {
+            padding: 1rem 1.25rem;
+            text-align: left;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+        }
+        
+        .command-table th {
+            background: var(--sage-dark);
+            color: white;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+        
+        .command-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .command-table tr:hover td {
+            background: rgba(150, 195, 163, 0.08);
+        }
+        
+        .command-table td:first-child {
+            font-family: 'Source Code Pro', monospace;
+            color: var(--sage-dark);
+            font-weight: 500;
+        }
+        
+        /* Model cards */
+        .model-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+            margin: 2rem 0;
+        }
+        
+        .model-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 2px 20px rgba(95, 111, 100, 0.08);
+            border-left: 4px solid var(--sage-mid);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .model-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(95, 111, 100, 0.12);
+        }
+        
+        .model-card.nano { border-left-color: #96C3A3; }
+        .model-card.mini { border-left-color: #4BCDAA; }
+        .model-card.main { border-left-color: #94B678; }
+        .model-card.max { border-left-color: #F5A06B; }
+        .model-card.coder { border-left-color: #64CDDC; }
+        .model-card.maxcoder { border-left-color: #C8D0D8; }
+        
+        .model-card h4 {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .model-card .base {
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.8rem;
+            color: var(--sage-mid);
+            margin-bottom: 1rem;
+        }
+        
+        .model-card p {
+            font-size: 0.9rem;
+            margin-bottom: 1rem;
+        }
+        
+        .model-card .specs {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        
+        .model-card .spec {
+            font-size: 0.8rem;
+            padding: 0.25rem 0.75rem;
+            background: var(--bone-dark);
+            border-radius: 20px;
+            color: var(--charcoal);
+            opacity: 0.8;
+        }
+        
+        .model-card .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            padding: 0.15rem 0.5rem;
+            background: var(--sage-light);
+            color: white;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        
+        /* Tips */
+        .tip-box {
+            background: linear-gradient(135deg, rgba(150, 195, 163, 0.15), rgba(150, 195, 163, 0.05));
+            border: 1px solid rgba(150, 195, 163, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        
+        .tip-box h4 {
+            color: var(--success);
+            font-size: 0.95rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .tip-box p {
+            margin: 0;
+            font-size: 0.95rem;
+        }
+        
+        .warning-box {
+            background: linear-gradient(135deg, rgba(232, 168, 124, 0.15), rgba(232, 168, 124, 0.05));
+            border: 1px solid rgba(232, 168, 124, 0.3);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        
+        .warning-box h4 {
+            color: #C07B4A;
+            font-size: 0.95rem;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        /* Feature list */
+        .feature-list {
+            list-style: none;
+            margin: 1.5rem 0;
+        }
+        
+        .feature-list li {
+            padding: 0.75rem 0;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.75rem;
+        }
+        
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .feature-list .icon {
+            color: var(--sage-mid);
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+        
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            border-top: 1px solid rgba(95, 111, 100, 0.1);
+            margin-top: 4rem;
+        }
+        
+        footer p {
+            font-size: 0.9rem;
+            opacity: 0.6;
+        }
+        
+        footer a {
+            color: var(--sage-dark);
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            nav {
+                padding: 1rem 1.5rem;
+            }
+            
+            .nav-links {
+                gap: 1.5rem;
+            }
+            
+            main {
+                padding: 6rem 1.5rem 3rem;
+            }
+            
+            .docs-header h1 {
+                font-size: 2rem;
+            }
+            
+            .toc ul {
+                grid-template-columns: 1fr;
+            }
+            
+            .model-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav>
+        <a href="index.html" class="logo">
+            <svg class="logo-icon" viewBox="0 0 400 400" fill="none">
+                <path d="M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="logo-text">Bert CLI</span>
+        </a>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="docs.html" class="active">Docs</a></li>
+            <li><a href="index.html#models">Models</a></li>
+            <li><a href="https://github.com/mnisperuza/bert-cli" target="_blank">GitHub</a></li>
+        </ul>
+    </nav>
+
+    <main>
+        <!-- Header -->
+        <header class="docs-header">
+            <h1>Documentation</h1>
+            <p>Everything you need to know about using Bert CLI — commands, models, tips, and best practices.</p>
+        </header>
+        
+        <!-- Table of Contents -->
+        <div class="toc">
+            <h2>📚 Contents</h2>
+            <ul>
+                <li><a href="#getting-started">Getting Started</a></li>
+                <li><a href="#commands">Commands Reference</a></li>
+                <li><a href="#models">Model Guide</a></li>
+                <li><a href="#thinking">Thinking Mode</a></li>
+                <li><a href="#files">File References</a></li>
+                <li><a href="#tokens">Token System</a></li>
+                <li><a href="#quantization">Quantization</a></li>
+                <li><a href="#tips">Tips & Best Practices</a></li>
+            </ul>
+        </div>
+        
+        <!-- Getting Started -->
+        <section id="getting-started">
+            <h2>🚀 Getting Started</h2>
+
+            <h2>About Bert</h2>
+
+            <p>The idea of <em>Bert</em> was actually concived during 2022, During this time, AI assistants were just raising
+            to what they are today, Bert idea begins when the idea of a AI model for you and only you that can be
+            whatever you want it to be, when this Idea raised, Biwa wasn't yet created, and I, Matias Nisperuza <em>(Biwa's Current Owner)</em>
+            was younger and had no chance on making bert, but times change, for good.</p>
+
+            <h2>Bert Identity</h2>
+
+            <p>We frame bert as a service fundamentally oriented around human satisfaction, not raw capability benchmarks or abstract performance metrics. <br>
+
+                At its core, bert is built to feel like a reliable presence—a system that users can return to consistently, trust implicitly, and engage with naturally. In practical terms, this means prioritizing clarity over cleverness, helpfulness over verbosity, and dependability over spectacle. <br>
+
+                    bert is not positioned as an omniscient authority or a cold computational engine. Instead, it operates as a dependable companion: <br>
+                        a system that understands context, respects user intent, and responds in a way that feels grounded, supportive, and predictable.</p>
+            <div class="palette">
+             <h3>Bert palette</h3>
+             <p>Bert Main colors:</p>
+             <ul>
+                <li>Dark Sage (#598556)</li>
+                <li>Light Beige (#F5F5DC)</li>
+                <li>Sage (#9C9C9C)</li>
+                <li>Olive (#808000)</li>
+             </ul>
+            </div>
+            
+            <h3>Installation</h3>
+            <pre><code># Strongly Recommended- Using PyPI pip install
+pip install bert-cli
+
+#Run bert after install
+bert
+
+#cloning repo in github - not recommended
+git clone https://github.com/mnisperuza/bert-cli.git
+cd bert-cli
+
+# Install dependencies
+pip install -e .
+
+# Run Bert
+bert 
+</code></pre>
+
+<p><em><strong>By installing bert you are agreeing to the terms of use and privacy.</strong></em></p>
+            
+            <h3>First Run</h3>
+            <p>When you first run Bert, you'll see an animated banner followed by a quantization picker. Choose based on your GPU:</p>
+            
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">⭐</span>
+                    <span><strong>INT4-FAST</strong> — Best for most users. Works with 4GB+ VRAM.</span>
+                </li>
+                <li>
+                    <span class="icon">🔷</span>
+                    <span><strong>INT8-BALANCED</strong> — Higher quality. Needs 6GB+ VRAM.</span>
+                </li>
+                <li>
+                    <span class="icon">💎</span>
+                    <span><strong>FP16-HIGH-END</strong> — Best quality. Needs 8GB+ VRAM.</span>
+                </li>
+                <li>
+                    <span class="icon">🖥️</span>
+                    <span><strong>FP32-CPU</strong> — CPU mode. Slower but no GPU needed.</span>
+                </li>
+            </ul>
+            
+            <div class="tip-box">
+                <h4>💡 Pro Tip</h4>
+                <p>After the banner, Bert automatically loads the Nano model. You don't need to do anything — just start chatting!</p>
+            </div>
+        </section>
+        
+        <!-- Commands Reference -->
+        <section id="commands">
+            <h2>⌨️ Commands Reference</h2>
+            
+            <h3>Model Commands</h3>
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>bert nano</td>
+                        <td>Switch to Bert Nano (fastest, LiquidAI-LFM2-700M)</td>
+                    </tr>
+                    <tr>
+                        <td>bert mini</td>
+                        <td>Switch to Bert Mini (balanced, LiquidAI-LFM2-1.2B)</td>
+                    </tr>
+                    <tr>
+                        <td>bert main</td>
+                        <td>Switch to Bert Main (thinking mode, Qwen3-1.7B)</td>
+                    </tr>
+                    <tr>
+                        <td>bert max</td>
+                        <td>Switch to Bert Max (reasoning, LiquidAI-LFM2-2.6B)</td>
+                    </tr>
+                    <tr>
+                        <td>bert coder</td>
+                        <td>Switch to Bert Coder (code, Qwen2.5 Coder-1.5B)</td>
+                    </tr>
+                    <tr>
+                        <td>bert maxcoder</td>
+                        <td>Switch to Bert Max-Coder (heavy code, Qwen 2.5-coder-3B-Instruct)</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <h3>Quantization Commands</h3>
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>bert int4</td>
+                        <td>Switch to INT4 quantization (4GB VRAM)</td>
+                    </tr>
+                    <tr>
+                        <td>bert int8</td>
+                        <td>Switch to INT8 quantization (6GB VRAM)</td>
+                    </tr>
+                    <tr>
+                        <td>bert fp16</td>
+                        <td>Switch to FP16 (8GB+ VRAM)</td>
+                    </tr>
+                    <tr>
+                        <td>bert fp32</td>
+                        <td>Switch to FP32 (CPU mode)</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <h3>System Commands</h3>
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Command</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>/*token XXXX</td>
+                        <td>Set your weekly token</td>
+                    </tr>
+                    <tr>
+                        <td>/*tokens</td>
+                        <td>Show token status and remaining count</td>
+                    </tr>
+                    <tr>
+                        <td>/*think - question</td>
+                        <td>Enable thinking mode for this query (bert main only-BETA-)</td>
+                    </tr>
+                    <tr>
+                        <td>/*help</td>
+                        <td>Show help and all commands</td>
+                    </tr>
+                    <tr>
+                        <td>/*status</td>
+                        <td>Show current model, quant, and device info</td>
+                    </tr>
+                    <tr>
+                        <td>/*memory</td>
+                        <td>Clear conversation memory</td>
+                    </tr>
+                    <tr>
+                        <td>/*clear</td>
+                        <td>Clear screen and show banner</td>
+                    </tr>
+                    <tr>
+                        <td>/*exit</td>
+                        <td>Exit Bert CLI</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <h3>During Generation</h3>
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>ESC</td>
+                        <td>Stop generation immediately</td>
+                    </tr>
+                    <tr>
+                        <td>Ctrl+C</td>
+                        <td>Stop generation (interrupt)</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+        
+        <!-- Model Guide -->
+        <section id="models">
+            <h2>🤖 Model Guide</h2>
+            <p>Bert comes with 6 specialized models, each optimized for different tasks.</p>
+            
+            <div class="model-grid">
+                <div class="model-card nano">
+                    <h4>Bert Nano <span class="badge">Fastest</span></h4>
+                    <div class="base">LiquidAI/LFM2-700M</div>
+                    <p>Ultra-fast responses for quick questions, brainstorming, and casual chat. Perfect for low-end GPUs.</p>
+                    <div class="specs">
+                        <span class="spec">~2GB VRAM</span>
+                        <span class="spec">32K context</span>
+                    </div>
+                </div>
+                
+                <div class="model-card mini">
+                    <h4>Bert Mini</h4>
+                    <div class="base">LiquidAI/LFM2-1.2B</div>
+                    <p>Balanced performance for everyday tasks. Good quality with reasonable speed.</p>
+                    <div class="specs">
+                        <span class="spec">~4GB VRAM</span>
+                        <span class="spec">32K context</span>
+                    </div>
+                </div>
+                
+                <div class="model-card main">
+                    <h4>Bert Main <span class="badge">🧠 Thinking</span></h4>
+                    <div class="base">Qwen/Qwen3-1.7B</div>
+                    <p>The flagship model with thinking capabilities. Shows its reasoning process when using <code>/*think</code>.</p>
+                    <div class="specs">
+                        <span class="spec">~5GB VRAM</span>
+                        <span class="spec">128K context</span>
+                    </div>
+                </div>
+                
+                <div class="model-card max">
+                    <h4>Bert Max <span class="badge">Powerful</span></h4>
+                    <div class="base">LiquidAI/LFM2-2.6B</div>
+                    <p>Advanced reasoning and complex analysis. Best for nuanced discussions and detailed explanations.</p>
+                    <div class="specs">
+                        <span class="spec">~8GB VRAM</span>
+                        <span class="spec">16K context</span>
+                    </div>
+                </div>
+                
+                <div class="model-card coder">
+                    <h4>Bert Coder <span class="badge">Code</span></h4>
+                    <div class="base">Qwen/Qwen2.5-Coder-1.5B-Instruct</div>
+                    <p>Specialized for programming. Write, debug, and explain code across multiple languages.</p>
+                    <div class="specs">
+                        <span class="spec">~4GB VRAM</span>
+                        <span class="spec">32K context</span>
+                    </div>
+                </div>
+                
+                <div class="model-card maxcoder">
+                    <h4>Bert Max-Coder <span class="badge">Heavy Code</span></h4>
+                    <div class="base">Qwen/Qwen2.5-Coder-3B-Instruct</div>
+                    <p>For complex, multi-file projects and production-quality code. Best for professional development.</p>
+                    <div class="specs">
+                        <span class="spec">~8GB VRAM</span>
+                        <span class="spec">32K context</span>
+                    </div>
+                </div>
+            </div>
+            
+            <h3>Which Model Should I Use?</h3>
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">💬</span>
+                    <span><strong>Casual chat, quick questions:</strong> Bert Nano</span>
+                </li>
+                <li>
+                    <span class="icon">📝</span>
+                    <span><strong>Writing, summarizing, general tasks:</strong> Bert Mini or Main</span>
+                </li>
+                <li>
+                    <span class="icon">🧠</span>
+                    <span><strong>Complex reasoning, math, analysis:</strong> Bert Main (with /*think) or Max</span>
+                </li>
+                <li>
+                    <span class="icon">💻</span>
+                    <span><strong>Simple code, scripts, debugging:</strong> Bert Coder</span>
+                </li>
+                <li>
+                    <span class="icon">🏗️</span>
+                    <span><strong>Large codebases, architecture:</strong> Bert Max-Coder</span>
+                </li>
+            </ul>
+        </section>
+        
+        <!-- Thinking Mode -->
+        <section id="thinking">
+            <h2>🧠 Thinking Mode-BETA</h2>
+            <p>Bert Main (Qwen3-1.7B) supports a special thinking mode that shows the model's reasoning process after the response generation
+                We are improving this feature, so expect a major update in a couple of months.</p>
+            
+            <h3>How to Use</h3>
+            <pre><code>/*think - What is the derivative of x³ + 2x²?</code></pre>
+            
+            <p>The response will show:</p>
+            <ol style="margin: 1rem 0 1rem 2rem;">
+                <li>The model's answer (streamed normally)</li>
+                <li>A thinking box showing the reasoning process</li>
+                <li>Token count (only counts the response, not thinking)</li>
+            </ol>
+            
+            <div class="warning-box">
+                <h4>⚠️ Important</h4>
+                <p>Thinking mode only works with <strong>Bert Main</strong>. Other models will show a warning if you try to use <code>/*think</code>.</p>
+            </div>
+            
+            <h3>When to Use Thinking</h3>
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">✓</span>
+                    <span>Math problems and calculations</span>
+                </li>
+                <li>
+                    <span class="icon">✓</span>
+                    <span>Logic puzzles and reasoning tasks</span>
+                </li>
+                <li>
+                    <span class="icon">✓</span>
+                    <span>Complex questions with multiple steps</span>
+                </li>
+                <li>
+                    <span class="icon">✓</span>
+                    <span>When you want to understand HOW Bert reached an answer</span>
+                </li>
+            </ul>
+        </section>
+        
+        <!-- File References -->
+        <section id="files">
+            <h2>📁 File References-BETA</h2>
+            <p>You can reference files directly in your queries using the <code>@</code> symbol.
+            Bert can easily find, check and read files in the current directory, although, Features like reviewing
+            files or adding a relative path are still in early development.
+            if you enconter a issue, dont doubt emailing us at biwaindustries@gmail.com</p>
+            
+            <h3>Usage</h3>
+            <pre><code># Reference a file
+Check @main.py for bugs
+
+# Multiple files
+Compare @old_version.py and @new_version.py
+
+# Relative paths
+Review the code in @src/utils/helpers.js</code></pre>
+            
+            <h3>Supported File Types</h3>
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Extensions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Code</td>
+                        <td>.py, .js, .ts, .java, .c, .cpp, .go, .rs, .rb, .php</td>
+                    </tr>
+                    <tr>
+                        <td>Web</td>
+                        <td>.html, .css, .jsx, .tsx, .vue, .svelte</td>
+                    </tr>
+                    <tr>
+                        <td>Data</td>
+                        <td>.json, .yaml, .yml, .xml, .csv, .toml</td>
+                    </tr>
+                    <tr>
+                        <td>Docs</td>
+                        <td>.md, .txt, .rst, .log</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="tip-box">
+                <h4>💡 Pro Tip</h4>
+                <p>File paths are often resolved relative to your current directory. Bert will show "📂 Found: filename" when it successfully reads a file.</p>
+            </div>
+        </section>
+        
+        <!-- Token System -->
+        <section id="tokens">
+            <h2>🎟️ Token System</h2>
+            <p>Bert uses a weekly token system to manage usage. Every week, you get <strong>20,000 free tokens</strong>.</p>
+            
+            <h3>Getting a Token</h3>
+            <ol style="margin: 1rem 0 1rem 2rem;">
+                <li>Visit <a href="index.html" style="color: var(--sage-dark);">the Bert CLI homepage</a></li>
+                <li>Enter your email</li>
+                <li>Receive your token (format: <code>BERT-XXXX-XXXX-XXXX-XXXX</code>)</li>
+                <li>In Bert, type: <code>/*token YOUR-TOKEN-HERE</code></li>
+            </ol>
+            
+            <h3>Token Commands</h3>
+            <pre><code># Set your token
+/*token BERT-A1B2-C3D4-E5F6-0123
+
+# Check remaining tokens
+/*tokens</code></pre>
+            
+            <h3>How Tokens Are Counted</h3>
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">📊</span>
+                    <span>Each response uses tokens based on length</span>
+                </li>
+                <li>
+                    <span class="icon">🧠</span>
+                    <span>Thinking content does NOT count against your tokens</span>
+                </li>
+                <li>
+                    <span class="icon">🔄</span>
+                    <span>Tokens reset every week (Sunday midnight)</span>
+                </li>
+                <li>
+                    <span class="icon">📧</span>
+                    <span>One token per email per week</span>
+                </li>
+            </ul>
+        </section>
+        
+        <!-- Quantization -->
+        <section id="quantization">
+            <h2>⚙️ Quantization Guide</h2>
+            <p>Quantization reduces model size and memory usage, allowing larger models to run on smaller GPUs.</p>
+            
+            <table class="command-table">
+                <thead>
+                    <tr>
+                        <th>Level</th>
+                        <th>VRAM</th>
+                        <th>Quality</th>
+                        <th>Speed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>INT4</td>
+                        <td>~4GB</td>
+                        <td>Good ⭐</td>
+                        <td>Fast</td>
+                    </tr>
+                    <tr>
+                        <td>INT8</td>
+                        <td>~6GB</td>
+                        <td>Very Good</td>
+                        <td>Medium</td>
+                    </tr>
+                    <tr>
+                        <td>FP16</td>
+                        <td>~8GB</td>
+                        <td>Excellent</td>
+                        <td>Medium</td>
+                    </tr>
+                    <tr>
+                        <td>FP32</td>
+                        <td>CPU</td>
+                        <td>Best</td>
+                        <td>Slow</td>
+                    </tr>
+                </tbody>
+            </table>
+            
+            <div class="tip-box">
+                <h4>💡 Recommendation</h4>
+                <p>Start with <strong>INT4</strong>. It offers the best balance of quality, speed, and memory usage for most users.</p>
+            </div>
+        </section>
+        
+        <!-- Tips -->
+        <section id="tips">
+            <h2>✨ Tips & Best Practices</h2>
+            
+            <h3>Getting Better Responses</h3>
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">1.</span>
+                    <span><strong>Be specific:</strong> "Write a Python function that sorts a list" is better than "Write code"</span>
+                </li>
+                <li>
+                    <span class="icon">2.</span>
+                    <span><strong>Provide context:</strong> Share relevant background information</span>
+                </li>
+                <li>
+                    <span class="icon">3.</span>
+                    <span><strong>Use the right model:</strong> Bert Coder for code, Bert Main for reasoning</span>
+                </li>
+                <li>
+                    <span class="icon">4.</span>
+                    <span><strong>Reference files:</strong> Use <code>@filename</code> instead of pasting code</span>
+                </li>
+            </ul>
+            
+            <h3>Keyboard Shortcuts</h3>
+            <ul class="feature-list">
+                <li>
+                    <span class="icon">⎋</span>
+                    <span><strong>ESC:</strong> Stop generation instantly</span>
+                </li>
+                <li>
+                    <span class="icon">↑</span>
+                    <span><strong>Up Arrow:</strong> Previous command (terminal dependent)</span>
+                </li>
+                <li>
+                    <span class="icon">⌃C</span>
+                    <span><strong>Ctrl+C:</strong> Interrupt / stop</span>
+                </li>
+            </ul>
+            
+            <h3>Troubleshooting</h3>
+            <div class="warning-box">
+                <h4>Model won't load?</h4>
+                <p>Try a smaller model or lower quantization. If you're out of VRAM, use <code>bert fp32</code> for CPU mode.</p>
+            </div>
+            
+            <div class="warning-box">
+                <h4>Slow responses?</h4>
+                <p>Switch to Bert Nano for faster responses, or use INT4 quantization.</p>
+            </div>
+            
+            <div class="warning-box">
+                <h4>Token expired?</h4>
+                <p>Tokens are valid for one week. Get a new one at the homepage.</p>
+            </div>
+            <div class="warning-box">
+                <h4>Model return strange responses?</h4>
+                <p>Let us know which model, email us at <code>biwaindustries@gmail.com</code> We will review the issue!.</p>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>Bert CLI — Built with restraint and long-term intent.</p>
+        <p><a href="index.html">Home</a> · <a href="https://github.com/mnisperuza/bert-cli">GitHub</a> · <a href="mailto:biwaindustries@gmail.com">Contact</a></p>
+        <p style="margin-top: 1rem;">© 2025 Biwa Industries</p>
+    </footer>
+</body>
+</html>

@@ -1,12 +1,10 @@
 """
 Bert CLI — Setup
 Installable via: pip install bert-cli
-Cross-platform: Windows, Linux, macOS
-"""
+Cross-platform: Windows, Linux, macOS"""
 
 from setuptools import setup, find_packages
 from pathlib import Path
-import platform
 
 # Read README for long description
 readme_path = Path(__file__).parent / "README.md"
@@ -14,20 +12,29 @@ long_description = ""
 if readme_path.exists():
     long_description = readme_path.read_text(encoding='utf-8')
 
-# Base dependencies (all platforms)
+# Core dependencies (all platforms)
 install_requires = [
-    "torch>=2.0.0",
-    "transformers>=4.40.0",
+    # ML Core
+    "torch>=2.1.0",
+    "transformers>=4.42.0",
     "accelerate>=0.27.0",
+    
+    # Model Hub
     "huggingface-hub>=0.20.0",
-    "hf_xet>=1.1.0",  # Fast model downloads
+    "hf_xet>=1.1.0",
     "safetensors>=0.4.0",
+    
+    # Tokenizers (required by models)
+    "sentencepiece>=0.1.99",
+    "einops>=0.7.0",
+    
+    # Utilities
     "numpy>=1.24.0,<2.0.0",
 ]
 
 setup(
     name="bert-cli",
-    version="1.0.0b",
+    version="1.0.0",
     description="Bert — A calm, local AI assistant by Biwa",
     long_description=long_description,
     long_description_content_type="text/markdown",
@@ -35,6 +42,7 @@ setup(
     author_email="biwaindustries@gmail.com",
     url="https://github.com/mnisperuza/bert-cli",
     project_urls={
+        "Homepage": "https://mnisperuza.github.io/bert-cli/",
         "Bug Tracker": "https://github.com/mnisperuza/bert-cli/issues",
         "Documentation": "https://github.com/mnisperuza/bert-cli#readme",
         "Source": "https://github.com/mnisperuza/bert-cli",
@@ -43,13 +51,18 @@ setup(
     python_requires=">=3.8",
     install_requires=install_requires,
     extras_require={
+        # Linux quantization support
         "linux": [
-            "bitsandbytes>=0.43.0",  # Full quantization support
+            "bitsandbytes>=0.43.0",
         ],
-        "web": [
-            "duckduckgo-search>=6.0.0",
-            "requests>=2.31.0",
-            "beautifulsoup4>=4.12.0",
+        # Performance optimizations
+        "perf": [
+            "xformers>=0.0.25",
+        ],
+        # Full install
+        "full": [
+            "bitsandbytes>=0.43.0",
+            "xformers>=0.0.25",
         ],
     },
     entry_points={
@@ -58,7 +71,7 @@ setup(
         ],
     },
     classifiers=[
-        "Development Status :: 4 - Beta",
+        "Development Status :: 5 - Production/Stable",
         "Environment :: Console",
         "Intended Audience :: Developers",
         "Intended Audience :: End Users/Desktop",
@@ -75,5 +88,5 @@ setup(
         "Programming Language :: Python :: 3.12",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
-    keywords="ai assistant llm local cli qwen bert",
+    keywords="ai assistant llm local cli qwen llama deepseek bert biwa",
 )

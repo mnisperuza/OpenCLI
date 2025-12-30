@@ -46,6 +46,10 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
+# Translations
+*.mo
+*.pot
+
 # Environments
 .env
 .venv
@@ -62,10 +66,25 @@ venv.bak/
 *.swo
 *~
 
-# OS
+# macOS
 .DS_Store
-Thumbs.db
 
-# Project specific
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Bert data directory
 .bert/
+
+# Model cache
+*.bin
+*.safetensors
+*.gguf
+
+# Logs
 *.log
+
+# Temporary files
+*.tmp
+*.temp

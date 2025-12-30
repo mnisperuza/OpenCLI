@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About Biwa — Independent Software Studio</title>
+    <meta name="description" content="Biwa is an Independent Software Studio dedicated to building reliable, long-term systems and tools with a focus on performance, efficiency, and thoughtful design.">
+    
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 400 400' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816' stroke='%235F6F64' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --sage-dark: #5F6F64;
+            --sage-mid: #8FA79A;
+            --sage-light: #96C3A3;
+            --sage-pale: #C4D9C8;
+            --bone: #F5F3EE;
+            --bone-dark: #E8E5DE;
+            --charcoal: #2F3330;
+            --cosmic: #0E1110;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Fraunces', Georgia, serif;
+            background: var(--bone);
+            color: var(--charcoal);
+            line-height: 1.8;
+        }
+        
+        /* Subtle noise texture */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0.025;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+            z-index: 1000;
+        }
+        
+        nav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            padding: 1.25rem 4rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(245, 243, 238, 0.95);
+            backdrop-filter: blur(12px);
+            z-index: 100;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            text-decoration: none;
+            color: var(--sage-dark);
+        }
+        
+        .logo-icon { width: 26px; height: 26px; }
+        .logo-text { font-size: 1.1rem; font-weight: 500; }
+        
+        .nav-links {
+            display: flex;
+            gap: 2.5rem;
+            list-style: none;
+        }
+        
+        .nav-links a {
+            text-decoration: none;
+            color: var(--charcoal);
+            font-size: 0.9rem;
+            opacity: 0.65;
+            transition: opacity 0.2s;
+        }
+        
+        .nav-links a:hover { opacity: 1; }
+        
+        /* Hero Section */
+        .hero {
+            min-height: 70vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 10rem 2rem 4rem;
+            position: relative;
+        }
+        
+        .hero-bg {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: 
+                radial-gradient(ellipse at 30% 70%, rgba(150, 195, 163, 0.12) 0%, transparent 50%),
+                radial-gradient(ellipse at 70% 30%, rgba(143, 167, 154, 0.08) 0%, transparent 40%);
+            z-index: -1;
+        }
+        
+        .biwa-logo {
+            width: 220px;
+            height: auto;
+            margin-bottom: 1.5rem;
+            animation: float 6s ease-in-out infinite;
+        }
+        
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translateY(0) rotate(0deg); }
+            50% { transform: translateY(-12px) rotate(2deg); }
+        }
+        
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4rem);
+            font-weight: 300;
+            letter-spacing: -0.02em;
+            color: var(--sage-dark);
+            margin-bottom: 0.5rem;
+        }
+        
+        .hero .tagline {
+            font-size: 1.35rem;
+            font-weight: 400;
+            color: var(--sage-mid);
+            margin-bottom: 1.5rem;
+            margin-top: 0.5rem;
+        }
+        
+        .hero p {
+            font-size: 1.1rem;
+            max-width: 600px;
+            opacity: 0.8;
+            line-height: 1.9;
+        }
+        
+        /* Main Content */
+        main {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 0 2rem 4rem;
+        }
+        
+        section {
+            margin-bottom: 5rem;
+        }
+        
+        section h2 {
+            font-size: 1.75rem;
+            font-weight: 400;
+            color: var(--sage-dark);
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        section h2::before {
+            content: '';
+            width: 40px;
+            height: 2px;
+            background: var(--sage-light);
+        }
+        
+        section p {
+            margin-bottom: 1.25rem;
+            opacity: 0.85;
+            font-size: 1.05rem;
+        }
+        
+        /* Values */
+        .values-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .value-card {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 2px 20px rgba(95, 111, 100, 0.08);
+            border-top: 3px solid var(--sage-light);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .value-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 30px rgba(95, 111, 100, 0.12);
+        }
+        
+        .value-card .icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+        }
+        
+        .value-card h3 {
+            font-size: 1.15rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 0.75rem;
+        }
+        
+        .value-card p {
+            font-size: 0.95rem;
+            margin: 0;
+            opacity: 0.75;
+        }
+        
+        /* Projects */
+        .project-card {
+            background: white;
+            border-radius: 16px;
+            padding: 2.5rem;
+            margin: 2rem 0;
+            box-shadow: 0 4px 30px rgba(95, 111, 100, 0.1);
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+            align-items: center;
+        }
+        
+        .project-card.reverse {
+            direction: rtl;
+        }
+        
+        .project-card.reverse > * {
+            direction: ltr;
+        }
+        
+        .project-info h3 {
+            font-size: 1.5rem;
+            font-weight: 500;
+            color: var(--sage-dark);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        
+        .project-info .badge {
+            font-size: 0.7rem;
+            padding: 0.25rem 0.6rem;
+            background: var(--sage-light);
+            color: white;
+            border-radius: 4px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        
+        .project-info .badge.coming {
+            background: var(--sage-mid);
+        }
+        
+        .project-info .description {
+            font-size: 0.95rem;
+            color: var(--charcoal);
+            opacity: 0.8;
+            margin-bottom: 1.5rem;
+        }
+        
+        .project-info .tech {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .project-info .tech span {
+            font-size: 0.8rem;
+            padding: 0.3rem 0.75rem;
+            background: var(--bone-dark);
+            border-radius: 20px;
+            color: var(--charcoal);
+        }
+        
+        .project-visual {
+            background: var(--cosmic);
+            border-radius: 12px;
+            padding: 1.5rem;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.85rem;
+            color: var(--sage-pale);
+            line-height: 1.5;
+            overflow: hidden;
+        }
+        
+        .project-visual .prompt {
+            color: var(--sage-light);
+        }
+        
+        .project-visual .response {
+            color: #ddd;
+            margin-top: 0.5rem;
+        }
+        
+        .project-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            color: var(--sage-dark);
+            text-decoration: none;
+            font-size: 0.95rem;
+            font-weight: 500;
+            transition: gap 0.2s;
+        }
+        
+        .project-link:hover {
+            gap: 0.75rem;
+        }
+        
+        /* Quote */
+        .quote-section {
+            text-align: center;
+            padding: 4rem 2rem;
+            background: linear-gradient(135deg, rgba(150, 195, 163, 0.08), rgba(143, 167, 154, 0.04));
+            border-radius: 20px;
+            margin: 4rem 0;
+        }
+        
+        .quote-section blockquote {
+            font-size: 1.5rem;
+            font-weight: 300;
+            font-style: italic;
+            color: var(--sage-dark);
+            max-width: 700px;
+            margin: 0 auto 1.5rem;
+            line-height: 1.6;
+        }
+        
+        .quote-section cite {
+            font-size: 1rem;
+            font-style: normal;
+            opacity: 0.6;
+        }
+        
+        /* Contact */
+        .contact-section {
+            text-align: center;
+            padding: 3rem;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 30px rgba(95, 111, 100, 0.1);
+        }
+        
+        .contact-section h2 {
+            justify-content: center;
+        }
+        
+        .contact-section h2::before {
+            display: none;
+        }
+        
+        .contact-links {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-top: 1.5rem;
+            flex-wrap: wrap;
+        }
+        
+        .contact-links a {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--charcoal);
+            text-decoration: none;
+            font-size: 1rem;
+            opacity: 0.7;
+            transition: opacity 0.2s, color 0.2s;
+        }
+        
+        .contact-links a:hover {
+            opacity: 1;
+            color: var(--sage-dark);
+        }
+        
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 3rem 2rem;
+            border-top: 1px solid rgba(95, 111, 100, 0.1);
+            margin-top: 4rem;
+        }
+        
+        footer p {
+            font-size: 0.9rem;
+            opacity: 0.6;
+        }
+        
+        footer a {
+            color: var(--sage-dark);
+        }
+        
+        footer .copyright {
+            margin-top: 1rem;
+            font-size: 0.85rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            nav { padding: 1rem 1.5rem; }
+            .nav-links { gap: 1.5rem; font-size: 0.85rem; }
+            .hero { padding: 8rem 1.5rem 3rem; min-height: 60vh; }
+            .biwa-logo { width: 120px; height: 120px; }
+            main { padding: 0 1.5rem 3rem; }
+            .project-card { grid-template-columns: 1fr; }
+            .project-card.reverse { direction: ltr; }
+            .values-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <a href="index.html" class="logo">
+            <svg class="logo-icon" viewBox="0 0 400 400" fill="none">
+                <path d="M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816" stroke="currentColor" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="logo-text">Bert CLI</span>
+        </a>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="docs.html">Docs</a></li>
+            <li><a href="about.html">About</a></li>
+            <li><a href="https://github.com/mnisperuza/biwa-Biwa">GitHub</a></li>
+        </ul>
+    </nav>
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="hero-bg"></div>
+        
+        <!-- Biwa Logo with Letters -->
+        <img src="Biwa-in.png" alt="Biwa's Official Logo" width="450">
+            <g style="opacity:1">
+                <text xml:space="preserve" transform="matrix(0.41538038,0,0,0.45593125,-33.048117,-163.67001)" style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:85.3333px;font-family:'Courier New';text-align:start;fill:#5F6F64"><tspan x="237.26562" y="838.22453">BIWA</tspan></text>
+                <path style="fill:#5F6F64;opacity:1" d="m 14.885913,63.002873 -0.0124,18.107422 c 0.0013,-0.03751 0.0024,-0.07514 0.0036,-0.112655 0.0082,-0.340239 0.01486,-0.680305 0.02067,-1.02061 1.4e-5,-8.6e-4 -1.5e-5,-0.0017 0,-0.0026 z M 107.5769,78.589518 c -0.0823,-0.03511 -1.40312,1.291792 -2.93574,2.948657 -1.53262,1.656866 -3.5148,3.77778 -4.40438,4.713408 -0.889592,0.935627 -4.509752,4.814223 -8.044991,8.619112 -3.53525,3.80488 -7.103265,7.632695 -7.928715,8.505945 -1.26095,1.33398 -4.271581,4.57279 -5.084961,5.47046 -0.12653,0.13963 -0.795915,0.8544 -1.487765,1.58802 -0.69186,0.73361 -4.198992,4.49812 -7.793322,8.36538 -3.59433,3.86726 -7.9668,8.54773 -9.71672,10.40143 -1.74993,1.85369 -3.323317,3.57281 -3.496427,3.82044 -0.28759,0.41143 -0.217767,0.55146 0.810803,1.62006 0.6191,0.64318 3.757838,4.02694 6.974768,7.51995 3.21694,3.49301 7.128563,7.71484 8.692493,9.38186 1.56393,1.66701 3.098361,3.31539 3.409611,3.66282 0.31125,0.34743 7.339871,7.93825 15.619201,16.86822 8.279315,8.92997 15.191465,16.23836 15.360305,16.24036 0.16883,0.002 0.52528,-0.2756 0.7922,-0.61805 0.26693,-0.34245 6.69057,-7.30843 14.2751,-15.48019 7.58453,-8.17175 14.86775,-16.02152 16.18505,-17.4439 1.3173,-1.42239 2.50222,-2.69849 2.63292,-2.83549 0.13069,-0.13699 2.26443,-2.44365 4.74131,-5.12578 2.47689,-2.68213 6.24037,-6.7489 8.36383,-9.03718 2.12347,-2.28828 3.88779,-4.23191 3.92069,-4.31911 0.0329,-0.0872 -2.31,-2.71039 -5.2064,-5.82962 -2.8964,-3.11923 -7.96067,-8.57569 -11.25409,-12.12536 -3.29341,-3.54966 -6.71415,-7.21943 -7.6016,-8.15506 -0.88745,-0.93562 -2.36446,-2.51755 -3.28249,-3.51555 -0.91803,-0.99801 -2.39694,-2.57992 -3.28611,-3.51554 -0.88916,-0.935647 -4.50756,-4.814228 -8.04085,-8.619115 -3.53329,-3.804884 -7.14959,-7.683484 -8.0362,-8.619112 -0.88661,-0.935627 -2.15563,-2.313845 -2.81998,-3.062346 -0.66435,-0.748502 -1.27524,-1.389609 -1.35754,-1.424719 z m 3.24734,10.917163 c 0.0329,-0.03296 1.45392,2.257945 3.15795,5.090646 1.70403,2.8327 5.12908,8.518653 7.61142,12.635403 2.48233,4.11676 5.83237,9.67938 7.44451,12.36152 1.61215,2.68213 4.54047,7.53 6.50709,10.7735 1.96661,3.24351 3.80757,6.30576 4.09123,6.80476 l 0.51573,0.90743 -3.66438,1.56012 c -2.0155,0.85798 -4.34371,1.8529 -5.17384,2.21123 -0.83012,0.35834 -1.55387,0.65164 -1.60817,0.65164 -0.0543,0 -0.68368,-1.65889 -1.39888,-3.68608 -0.71519,-2.02719 -1.73686,-4.91035 -2.27015,-6.40736 -0.5333,-1.497 -2.67714,-7.51939 -4.76405,-13.38265 -2.0869,-5.86327 -5.30514,-14.89027 -7.1515,-20.060271 -1.84635,-5.170003 -3.32986,-9.426928 -3.29696,-9.459888 z m -7.15822,2.327507 c 3.4e-4,-6e-6 6.5e-4,-1.6e-5 0.002,0 0.002,3.47e-4 0.004,0.0013 0.006,0.0021 0.0773,0.04601 -0.22447,0.95037 -0.69712,2.381767 -0.42752,1.294742 -1.70982,5.263221 -2.84944,8.818578 -1.139608,3.55538 -2.263154,7.02556 -2.497,7.71168 -0.233846,0.68613 -0.882297,2.67648 -1.440739,4.42298 -1.053077,3.29345 -4.101921,12.77249 -6.638871,20.64061 -0.80447,2.49501 -1.678598,5.17395 -1.942518,5.95364 -0.26393,0.77968 -0.588276,1.40991 -0.720886,1.39991 -0.2095,-0.0154 -1.777675,-0.67343 -6.869865,-2.88406 l -1.195276,-0.51935 2.755388,-5.37745 c 1.51547,-2.9576 3.236629,-6.29591 3.825089,-7.41867 0.58846,-1.12275 2.064363,-3.98077 3.279903,-6.35103 1.21554,-2.37026 2.845492,-5.53461 3.622002,-7.03161 1.61381,-3.11121 4.195,-8.11445 6.903971,-13.38213 3.112442,-6.052236 4.297152,-8.362859 4.458122,-8.366932 z m -4.519617,1.279508 h 5.17e-4 5.17e-4 5.16e-4 5.17e-4 5.17e-4 5.17e-4 l 5.16e-4,5.17e-4 h 5.17e-4 l 5.17e-4,5.17e-4 h 5.17e-4 v 5.17e-4 l 5.16e-4,5.16e-4 5.17e-4,5.17e-4 v 5.17e-4 l 5.17e-4,5.17e-4 c 0.007,0.02648 -0.08161,0.174021 -0.241846,0.435115 -0.205659,0.335104 -0.566136,0.947241 -0.800984,1.360641 -1.912775,3.36702 -16.3635,28.85834 -19.80861,34.94257 -2.38337,4.20915 -4.435429,7.64626 -4.559929,7.63726 -0.32267,-0.0225 -0.48285,-0.0873 -4.80074,-1.9389 -2.1423,-0.91868 -3.937955,-1.67018 -3.990455,-1.67018 -0.05255,0 -0.668598,-0.2627 -1.368908,-0.58395 -1.13903,-0.52251 -1.243027,-0.6271 -0.989087,-0.98908 0.23082,-0.32901 4.717903,-5.18855 6.068363,-6.57221 0.52283,-0.53567 6.273775,-6.71462 11.525395,-12.38219 2.54309,-2.74451 4.685766,-5.04065 4.761466,-5.10305 0.07572,-0.0624 3.023525,-3.22672 6.550505,-7.03161 3.526971,-3.804887 6.721937,-7.224253 7.099825,-7.598504 0.341748,-0.338461 0.511831,-0.505318 0.548287,-0.50953 z m 8.345747,1.593701 h 5.1e-4 5.2e-4 c 2e-4,3e-5 0.001,-4.9e-5 0.002,0 l 5.1e-4,5.17e-4 h 5.2e-4 l 5.2e-4,5.17e-4 h 5.1e-4 l 5.2e-4,5.17e-4 5.2e-4,5.17e-4 c 0.0646,0.06474 2.95944,8.508675 6.31537,18.420585 0.42237,1.2475 1.75122,5.1261 2.9528,8.61911 1.20157,3.49301 2.36641,6.91185 2.58847,7.59798 0.22206,0.68613 1.48415,4.40371 2.80448,8.261 1.32032,3.85729 2.37526,7.038 2.34456,7.0683 -0.0926,0.0916 -7.63789,3.33973 -11.82667,5.09116 -1.12051,0.46851 -2.75411,1.15425 -3.63027,1.52394 l -1.59318,0.67231 -2.25516,-0.96066 c -1.24036,-0.5282 -4.34344,-1.84184 -6.895706,-2.91921 -2.552273,-1.07737 -4.910901,-2.08504 -5.241541,-2.23914 l -0.601514,-0.28008 0.407727,-1.36064 c 0.22428,-0.7485 0.733009,-2.48385 1.130164,-3.8561 0.397153,-1.37225 0.909489,-3.10759 1.138432,-3.85609 0.408157,-1.33442 2.735965,-9.24361 4.105692,-13.94902 0.3813,-1.30988 1.029556,-3.50446 1.440226,-4.87671 0.41067,-1.37226 1.05966,-3.56682 1.44229,-4.8767 0.75989,-2.60136 3.11891,-10.60656 3.97701,-13.495819 0.2964,-0.998 0.71457,-2.454955 0.92915,-3.238045 0.2057,-0.750728 0.40751,-1.338666 0.46147,-1.348239 z m 12.35376,2.658753 c 0.0612,0.06238 1.67383,1.797193 3.58377,3.85558 1.90994,2.05838 4.20012,4.50796 5.08961,5.44359 0.88949,0.93563 4.50403,4.81424 8.03206,8.61912 3.52803,3.80488 7.14222,7.68348 8.03156,8.61911 0.88934,0.93563 3.10915,3.2927 4.93303,5.23792 l 3.31607,3.53674 -1.62884,0.70176 c -0.89595,0.38586 -2.7127,1.16749 -4.03748,1.73685 -1.32478,0.56937 -2.49647,1.03294 -2.60345,1.03094 -0.10698,-0.002 -0.57872,-0.63997 -1.04852,-1.41748 -0.46981,-0.77751 -2.21909,-3.55713 -3.8871,-6.17689 -6.82142,-10.71363 -8.20728,-12.88777 -9.18032,-14.40222 -0.56025,-0.87199 -1.77644,-2.78529 -2.70268,-4.25193 -0.92623,-1.46663 -3.0208,-4.75897 -4.65449,-7.31635 -2.94342,-4.607662 -3.45832,-5.43607 -3.24322,-5.21674 z m 29.62249,40.18566 -0.59842,0.71779 c -0.4759,0.57046 -3.46437,3.84335 -5.52059,6.04614 -0.18675,0.20006 -1.40907,1.53249 -2.71611,2.96106 -1.30705,1.42857 -3.64992,3.97681 -5.2064,5.6627 -1.55648,1.68588 -3.43447,3.72756 -4.17339,4.53668 -0.63213,0.69217 -1.09657,1.16063 -1.14464,1.16065 h -5.1e-4 -5.2e-4 -5.2e-4 l -5.1e-4,-5.2e-4 h -5.2e-4 v -5.1e-4 h -5.2e-4 l -5.1e-4,-5.2e-4 v -5.2e-4 c -0.001,-0.005 0.004,-0.0189 0.016,-0.0393 0.56672,-0.94105 13.66728,-18.32601 13.93661,-18.49448 0.1706,-0.10671 1.45759,-0.72379 2.86029,-1.37149 z m -83.716858,0.23875 c 0.04086,-0.003 0.143013,0.0359 0.306441,0.0987 0.24202,0.093 1.102252,0.48632 1.911512,0.87385 0.80925,0.38754 2.709221,1.25962 4.222481,1.93838 2.46147,1.10407 2.82411,1.34203 3.43855,2.25516 0.37774,0.56138 1.152272,1.68406 1.721342,2.49494 1.4902,2.1234 1.974252,2.81762 5.215702,7.48481 2.5416,3.65953 5.172475,7.41 8.473385,12.07833 0.50721,0.71732 0.885892,1.30432 0.841292,1.30432 -0.04455,0 -0.986622,-0.99014 -2.093412,-2.19987 -1.10678,-1.20974 -3.940837,-4.29712 -6.297807,-6.86108 -2.35697,-2.56396 -5.267432,-5.73362 -6.467822,-7.0435 -1.20038,-1.30988 -4.059428,-4.4271 -6.353618,-6.92722 -2.2942,-2.50012 -4.369585,-4.7756 -4.611605,-5.05654 -0.272381,-0.31619 -0.374536,-0.43575 -0.306441,-0.44028 z m 70.893868,5.7304 c 0.0913,-0.003 0.0654,0.0623 0.009,0.16123 -0.15384,0.26511 -7.15413,9.86331 -16.21348,22.23016 -1.83038,2.49864 -3.39963,4.60722 -3.48713,4.68602 -0.0875,0.0788 0.45538,-1.03033 1.20665,-2.46496 0.75126,-1.43463 2.10721,-4.03764 3.01325,-5.78415 0.90603,-1.7465 2.57984,-4.96165 3.71967,-7.14478 1.13983,-2.18314 2.57573,-4.96235 3.1905,-6.17637 l 1.11777,-2.20761 3.05562,-1.39785 c 3.16085,-1.44604 4.15499,-1.89451 4.38837,-1.90169 z m -55.414193,1.28571 c 0.11377,0.0596 1.180578,0.55653 2.370398,1.10432 1.85219,0.85273 2.216132,1.11167 2.531112,1.79937 0.3499,0.76396 2.643839,5.17715 5.251359,10.10275 0.66041,1.2475 1.830005,3.46773 2.598808,4.93355 0.768805,1.46581 1.355713,2.66495 1.304313,2.66495 -0.0514,0 -0.558781,-0.6891 -1.12758,-1.53117 -0.568798,-0.84206 -1.529356,-2.24542 -2.134236,-3.11868 -0.60488,-0.87325 -2.003725,-2.9144 -3.108855,-4.53615 -1.10512,-1.62175 -2.431576,-3.56131 -2.947106,-4.30982 -3.62769,-5.26709 -4.918153,-7.20342 -4.738213,-7.10912 z m 42.383973,4.61935 v 5.2e-4 l 5.2e-4,5.1e-4 5.2e-4,5.2e-4 c 0.0261,0.0579 -0.36418,0.8276 -0.8785,1.72961 -0.52249,0.91633 -1.20648,2.12529 -1.51981,2.68666 -0.31334,0.56138 -3.36689,6.0219 -6.78615,12.13466 -3.41927,6.11277 -6.39124,11.3974 -6.60424,11.74347 l -0.38758,0.62942 -1.32395,-2.44378 c -0.72829,-1.34407 -2.92037,-5.3018 -4.87102,-8.79481 -1.950626,-3.49301 -3.852197,-6.91238 -4.226096,-7.59851 -0.3739,-0.68613 -1.068803,-1.96223 -1.544092,-2.83548 -0.71057,-1.30554 -3.509233,-6.32147 -3.897953,-6.98614 -0.05846,-0.1 0.233643,-0.0353 0.649573,0.14366 0.9673,0.41616 5.711684,2.58439 7.773688,3.55276 0.87151,0.40928 2.88341,1.33609 4.47053,2.0593 l 2.88561,1.31465 4.2447,-1.9451 c 9.75017,-4.46833 11.94515,-5.45352 12.01425,-5.39192 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 60.00306,132.35969 47.39738,13.61414 45.88469,-15.12682 2.01691,3.78171 -48.40583,19.66486 -47.649491,-20.16909 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="M 107.65255,78.974616 107.14832,51.431195 71.726347,38.195226 85.844715,52.81782 99.837024,59.246719 Z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 130.68842,118.61506 c 0.52656,-0.0478 1.05281,-0.0982 1.57908,-0.15002 0.70234,-0.0689 1.40655,-0.11533 2.11106,-0.15486 0.81624,-0.0431 1.63333,-0.0674 2.45032,-0.0909 0.7612,-0.0204 1.52256,-0.0345 2.28392,-0.0473 0.55101,-0.009 1.10206,-0.0161 1.65311,-0.0225 0,0 0,-2.7624 0,-2.7624 v 0 c -0.55106,0.008 -1.1021,0.0158 -1.65311,0.0265 -0.76137,0.0149 -1.5227,0.0318 -2.28392,0.0528 -0.81699,0.0226 -1.63379,0.0513 -2.45032,0.0872 -0.70453,0.0375 -1.40868,0.0828 -2.11106,0.15026 -0.52591,0.0487 -1.05133,0.10104 -1.57908,0.12599 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 85.035061,106.30382 c 0.455745,0.19755 0.919522,0.37278 1.391962,0.52585 0.732317,0.25419 1.468255,0.49568 2.19243,0.77258 0.741836,0.26222 1.464413,0.57373 2.199817,0.85277 0.433494,0.15626 0.865709,0.3157 1.301266,0.46616 0,0 0,-2.76068 0,-2.76068 v 0 c -0.435546,-0.14928 -0.867653,-0.30783 -1.301266,-0.46258 -0.735946,-0.27661 -1.459383,-0.58502 -2.199817,-0.8499 -0.724357,-0.27817 -1.461767,-0.5173 -2.19243,-0.77804 -0.473837,-0.15881 -0.940964,-0.33658 -1.391962,-0.55285 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 70.412466,123.31564 c 0.327824,0.15415 0.665041,0.28659 0.999908,0.42431 0.523746,0.21515 1.046599,0.43205 1.571205,0.64519 0.628742,0.2307 1.246137,0.48919 1.864889,0.7448 0.629213,0.27221 1.271444,0.51113 1.901401,0.78164 0.619035,0.26708 1.23865,0.53261 1.855367,0.80498 0.588727,0.25606 1.163783,0.54317 1.729597,0.84622 0.5392,0.2828 1.083154,0.55604 1.622137,0.83926 0.244649,0.11867 0.483103,0.24941 0.723826,0.37572 0,0 0,-2.50578 0,-2.50578 v 0 c -0.240697,-0.12563 -0.479301,-0.25538 -0.723826,-0.37353 -0.539197,-0.28177 -1.083196,-0.55391 -1.622137,-0.83615 -0.565867,-0.30317 -1.141304,-0.58965 -1.729597,-0.8469 -0.617064,-0.27042 -1.237088,-0.5338 -1.855367,-0.80144 -0.629512,-0.27197 -1.272161,-0.51029 -1.901401,-0.78285 -0.618654,-0.2565 -1.236861,-0.51343 -1.864889,-0.74665 -0.524958,-0.21517 -1.048018,-0.4346 -1.571205,-0.65393 -0.335682,-0.14021 -0.675058,-0.27335 -0.999908,-0.43776 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 78.695848,154.78133 c 0.217128,-0.006 0.43438,-0.006 0.651576,-0.006 0.309324,-0.001 0.618652,-7.9e-4 0.927976,-0.002 0.364969,2.6e-4 0.72957,-0.0225 1.094081,-0.0389 0.36467,-0.0139 0.72821,-0.048 1.092039,-0.0754 0.326839,-0.0288 0.651089,-0.0809 0.973637,-0.14009 0.251939,-0.0423 0.500576,-0.10029 0.74962,-0.15661 0,0 0,-1.71805 0,-1.71805 v 0 c -0.249041,0.0571 -0.49748,0.11664 -0.74962,0.15891 -0.322606,0.0591 -0.646906,0.11128 -0.973637,0.1414 -0.363771,0.0285 -0.727271,0.0642 -1.092039,0.0769 -0.364511,0.016 -0.729088,0.0395 -1.094081,0.0371 -0.309324,-0.001 -0.618652,-0.001 -0.927976,-0.002 -0.217196,-5.3e-4 -0.434448,-2.6e-4 -0.651576,-0.006 z" />
+                <path style="opacity:1;fill:#5F6F64;fill-opacity:1;stroke-width:0.264583" d="m 131.88664,154.52432 c 0.17791,-0.0233 0.35347,-0.0546 0.52537,-0.10636 0.30712,-0.0947 0.61135,-0.19886 0.91458,-0.30538 0.40084,-0.15059 0.79971,-0.30644 1.1996,-0.45958 0.47093,-0.16989 0.93329,-0.36228 1.39941,-0.54478 0.52647,-0.20752 1.06207,-0.38872 1.60113,-0.5603 0.4848,-0.15062 0.96887,-0.30307 1.45801,-0.4391 0.20258,-0.0594 0.40562,-0.11704 0.60895,-0.17373 0,0 0,-1.71059 0,-1.71059 v 0 c -0.20334,0.0577 -0.40637,0.11643 -0.60895,0.17676 -0.48912,0.13894 -0.97302,0.29452 -1.45801,0.44708 -0.5384,0.17261 -1.07534,0.34934 -1.60113,0.55791 -0.46588,0.18136 -0.92939,0.36911 -1.39941,0.53956 -0.39908,0.15333 -0.79897,0.30449 -1.1996,0.45366 -0.30323,0.10396 -0.60681,0.20758 -0.91458,0.29734 -0.17194,0.0485 -0.34705,0.081 -0.52537,0.0951 z" />
+                
+            </g>
+        <h1 class="sr-only">Biwa</h1>
+        <p class="tagline">Independent Software Studio</p>
+        <p>Dedicated to building reliable, long-term systems and tools — with a focus on performance, experience, and thoughtful design.</p>
+    </section>
+
+    <main>
+        <!-- Philosophy -->
+        <section>
+            <h2>Philosophy</h2>
+            <p>Biwa operates as a solo studio, building services that people can really rely on. we take a different approach: we build things meant to give the best experience to the user.</p>
+            <p>Every line of code is written with intention. Every feature serves a purpose. We believe great software should feel smooth and reliable for the people who use it.</p>
+            <p>We  truly belive AI it's the future, Just let us show you.</p>
+        </section>
+        
+        <!-- Values -->
+        <section>
+            <h2>Core Values</h2>
+            <div class="values-grid">
+                <div class="value-card">
+                    <div class="icon">⚡</div>
+                    <h3>Performance</h3>
+                    <p>Fast software is respectful software. We optimize relentlessly so you never have to wait.</p>
+                </div>
+                <div class="value-card">
+                    <div class="icon">🎯</div>
+                    <h3>Efficiency</h3>
+                    <p>Do more with less. Our tools are designed to be lightweight and resource-conscious.</p>
+                </div>
+                <div class="value-card">
+                    <div class="icon">🌿</div>
+                    <h3>Thoughtful Design</h3>
+                    <p>Every detail matters. We craft interfaces that are calm, intuitive, and pleasant to use.</p>
+                </div>
+                <div class="value-card">
+                    <div class="icon">🔒</div>
+                    <h3>Privacy First</h3>
+                    <p>Your data is yours. We build local-first software that respects your privacy by default.</p>
+                </div>
+                <div class="value-card">
+                    <div class="icon">🛠️</div>
+                    <h3>Long-term Thinking</h3>
+                    <p>We build for the future. Sustainable code, stable APIs, and lasting reliability.</p>
+                </div>
+                <div class="value-card">
+                    <div class="icon">🤝</div>
+                    <h3>Open Source Spirit</h3>
+                    <p>Transparency builds trust. We share our work openly and contribute to the community.</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Projects -->
+        <section>
+            <h2>Projects</h2>
+            
+            <div class="project-card">
+                <div class="project-info">
+                    <h3>
+                        Bert CLI
+                        <span class="badge">Flagship</span>
+                    </h3>
+                    <p class="description">A calm, local AI assistant that runs entirely on your machine. No cloud, no API keys, no data leaving your computer. Just you and a helpful AI.</p>
+                    <p class="description">Bert features 6 specialized models, thinking mode, file references, and a beautiful terminal interface with animated gradients.</p>
+                    <div class="tech">
+                        <span>Python</span>
+                        <span>PyTorch</span>
+                        <span>Transformers</span>
+                        <span>Local LLMs</span>
+                    </div>
+                    <a href="index.html" class="project-link">
+                        Learn more →
+                    </a>
+                </div>
+                <div class="project-visual">
+                    <div class="prompt">❯ How do I reverse a string in Python?</div>
+                    <div class="response">
+Bert: You can reverse a string using slicing:
+
+```python
+text = "hello"
+reversed_text = text[::-1]
+print(reversed_text)  # "olleh"
+```
+
+The [::-1] slice steps backwards through the entire string.
+                    </div>
+                </div>
+            </div>
+            
+            <div class="project-card reverse">
+                <div class="project-info">
+                    <h3>
+                        Simula
+                        <span class="badge coming">Coming Soon</span>
+                    </h3>
+                    <p class="description">A new project in early development. Details coming soon.</p>
+                    <p class="description">Stay tuned for updates on this exciting new addition to the Biwa ecosystem.</p>
+                    <div class="tech">
+                        <span>AI</span>
+                        <span>Infrastructure</span>
+                        <span>TBA</span>
+                    </div>
+                </div>
+                <div class="project-visual" style="display: flex; align-items: center; justify-content: center; min-height: 150px;">
+                    <span style="font-size: 1.1rem; opacity: 0.5;">🚧 In Development</span>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Quote -->
+        <div class="quote-section">
+            <blockquote>
+                "Built with restraint and long-term intent."
+            </blockquote>
+            <cite>— Biwa's guiding principle</cite>
+        </div>
+        
+        <!-- About the Studio -->
+        <section>
+            <h2>About the Studio</h2>
+            <p>Biwa currently operates as a solo studio based in Colombia, founded and run by Matias Nisperuza. The focus is on AI-related software and infrastructure — tools that enhance human capability without compromising privacy or autonomy.</p>
+            <p>The name "Biwa" comes from a sense of creating something organic, natural, and enduring — like the growth of a tree or the flow of water. Software that works with you, not against you.</p>
+        </section>
+        
+        <!-- Contact -->
+        <section class="contact-section">
+            <h2>Get in Touch</h2>
+            <p>Have questions, feedback, or just want to say hello?</p>
+            <div class="contact-links">
+                <a href="mailto:biwaindustries@gmail.com">
+                    <span>📧</span> biwaindustries@gmail.com
+                </a>
+                <a href="https://github.com/mnisperuza/biwa-Biwa" target="_blank">
+                    <span>💻</span> GitHub
+                </a>
+                <a href="https://github.com/mnisperuza/bert-cli/issues" target="_blank">
+                    <span>🐛</span> Report an Issue
+                </a>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p><a href="index.html">Bert CLI</a> · <a href="docs.html">Docs</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="about.html">About</a></p>
+        <p class="copyright">© 2025 Biwa Industries — All rights reserved.</p>
+    </footer>
+</body>
+</html>

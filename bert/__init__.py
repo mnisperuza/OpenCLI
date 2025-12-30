@@ -1,13 +1,12 @@
 """
 Bert CLI — A calm, local AI assistant by Biwa
-Version 1.0.0b (Beta)
+Version 1.0.0 (Stable)
 """
 
-__version__ = "1.0.0b"
+__version__ = "1.0.0"
 __author__ = "Biwa"
-__email__ = "contact@biwaindustries.com"
 
 from bert.cli import main, BertCLI
-from bert.engine import get_engine, BertEngine
+from bert.engine import get_engine, BertEngine, get_token_manager, get_interrupt_handler
 
-__all__ = ['main', 'BertCLI', 'get_engine', 'BertEngine', '__version__']
+__all__ = ['main', 'BertCLI', 'get_engine', 'BertEngine', 'get_token_manager', 'get_interrupt_handler']

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bert-cli"
-version = "1.0.0b"
-description = "Bert — A calm, local AI assistant by Biwa"
+version = "1.0.0"
+description = "Bert — A Friendly, local AI assistant by Biwa"
 readme = "README.md"
 license = {text = "Proprietary"}
 authors = [
@@ -13,7 +13,7 @@ authors = [
 ]
 requires-python = ">=3.8"
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: End Users/Desktop",
@@ -29,32 +29,32 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["ai", "assistant", "llm", "local", "cli", "qwen", "bert"]
+keywords = ["ai", "assistant", "llm", "local", "cli", "qwen", "llama", "deepseek", "bert", "biwa"]
+
+# Core dependencies
 dependencies = [
-    "torch>=2.0.0",
-    "transformers>=4.40.0",
+    "torch>=2.1.0",
+    "transformers>=4.42.0",
     "accelerate>=0.27.0",
     "huggingface-hub>=0.20.0",
     "hf_xet>=1.1.0",
     "safetensors>=0.4.0",
+    "sentencepiece>=0.1.99",
+    "einops>=0.7.0",
     "numpy>=1.24.0,<2.0.0",
+    "bitsandbytes>=0.43.0",
 ]
 
 [project.optional-dependencies]
-linux = [
-    "bitsandbytes>=0.43.0",
-]
-web = [
-    "duckduckgo-search>=6.0.0",
-    "requests>=2.31.0",
-    "beautifulsoup4>=4.12.0",
-]
+linux = ["bitsandbytes>=0.43.0"]
+perf = ["xformers>=0.0.25"]
+full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25"]
 
 [project.scripts]
 bert = "bert.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mnisperuza/bert-cli"
+Homepage = "https://mnisperuza.github.io/bert-cli/"
 Documentation = "https://github.com/mnisperuza/bert-cli#readme"
 Repository = "https://github.com/mnisperuza/bert-cli"
 Issues = "https://github.com/mnisperuza/bert-cli/issues"
