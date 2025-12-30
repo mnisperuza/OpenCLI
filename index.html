@@ -838,7 +838,7 @@
             
             <div class="claim-form">
                 <h4>🎫 Generate Your Token Key</h4>
-                <form id="tokenForm" onsubmit="return handleTokenSubmit(event)">
+                <div id="tokenForm">
                     <div class="form-group">
                         <label for="email">Email Address</label>
                         <input type="email" id="email" placeholder="you@example.com" required>
@@ -849,8 +849,8 @@
                         <textarea id="feedback" placeholder="What would you like to see in Bert? Any bugs or suggestions?"></textarea>
                         <small>Help us improve! Your feedback shapes Bert's future.</small>
                     </div>
-                    <button type="submit" class="btn btn-primary claim-btn">Generate Token Key →</button>
-                </form>
+                    <button type="button" onclick="generateToken()" class="btn btn-primary claim-btn">Generate Token Key →</button>
+                </div>
                 
                 <div class="token-result" id="tokenResult">
                     <h5>✓ Your Token Key</h5>
@@ -875,10 +875,8 @@
     </footer>
 
     <script>
-        // ═══════════════════════════════════════════════════════════════════
-        // TOKEN SERVER - Your Railway backend
-        // ═══════════════════════════════════════════════════════════════════
-        const TOKEN_SERVER_URL = 'https://bert-token-server-production.up.railway.app';
+        // TOKEN SERVER
+        var TOKEN_SERVER_URL = 'https://bert-token-server-production.up.railway.app';
         
         function copyCode(btn, code) {
             navigator.clipboard.writeText(code);
@@ -886,33 +884,28 @@
             setTimeout(function() { btn.textContent = 'Copy'; }, 2000);
         }
         
-        function handleTokenSubmit(e) {
-            e.preventDefault();
-            generateToken();
-            return false;
-        }
-        
-        async function generateToken() {
+        function generateToken() {
             var email = document.getElementById('email').value.trim();
             var feedbackEl = document.getElementById('feedback');
             var feedback = feedbackEl ? feedbackEl.value.trim() : '';
             
-            if (!email) return;
+            if (!email) {
+                alert('Please enter your email address.');
+                return;
+            }
             
             var btn = document.querySelector('.claim-btn');
             var originalText = btn.textContent;
             btn.textContent = 'Generating...';
             btn.disabled = true;
             
-            try {
-                var response = await fetch(TOKEN_SERVER_URL + '/api/claim', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ email: email, feedback: feedback })
-                });
-                
-                var data = await response.json();
-                
+            fetch(TOKEN_SERVER_URL + '/api/claim', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email: email, feedback: feedback })
+            })
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
                 if (data.success && data.token) {
                     document.getElementById('generatedToken').textContent = data.token;
                     document.getElementById('tokenResult').classList.add('show');
@@ -920,13 +913,15 @@
                 } else {
                     alert(data.error || 'Failed to generate token. Please try again.');
                 }
-            } catch (error) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            })
+            .catch(function(error) {
                 console.error('Token error:', error);
                 alert('Could not connect to token server. Please try again later.');
-            }
-            
-            btn.textContent = originalText;
-            btn.disabled = false;
+                btn.textContent = originalText;
+                btn.disabled = false;
+            });
         }
         
         function copyToken() {
