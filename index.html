@@ -875,43 +875,51 @@
     </footer>
 
     <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+        // ═══════════════════════════════════════════════════════════════════
+        // TOKEN SERVER - Your Railway backend
+        // ═══════════════════════════════════════════════════════════════════
+        const TOKEN_SERVER_URL = 'https://bert-token-server-production.up.railway.app';
+        
         function copyCode(btn, code) {
             navigator.clipboard.writeText(code);
             btn.textContent = 'Copied!';
             setTimeout(() => btn.textContent = 'Copy', 2000);
         }
         
-        function generateToken(e) {
+        async function generateToken(e) {
             e.preventDefault();
             const email = document.getElementById('email').value.trim();
+            const feedback = document.getElementById('feedback')?.value?.trim() || '';
             if (!email) return;
             
-            const token = createToken(email);
-            document.getElementById('generatedToken').textContent = token;
-            document.getElementById('tokenResult').classList.add('show');
-            document.getElementById('tokenResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        
-        function createToken(email) {
-            let hash = 0;
-            for (let i = 0; i < email.length; i++) {
-                hash = ((hash << 5) - hash) + email.charCodeAt(i);
-                hash = hash & hash;
+            const btn = document.querySelector('.claim-btn');
+            const originalText = btn.textContent;
+            btn.textContent = 'Generating...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch(`${TOKEN_SERVER_URL}/api/claim`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, feedback })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.token) {
+                    document.getElementById('generatedToken').textContent = data.token;
+                    document.getElementById('tokenResult').classList.add('show');
+                    document.getElementById('tokenResult').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                } else {
+                    alert(data.error || 'Failed to generate token. Please try again.');
+                }
+            } catch (error) {
+                console.error('Token error:', error);
+                alert('Could not connect to token server. Please try again later.');
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
             }
-            hash = Math.abs(hash);
-            
-            const now = new Date();
-            const start = new Date(now.getFullYear(), 0, 1);
-            const week = Math.ceil((((now - start) / 86400000) + start.getDay() + 1) / 7);
-            const weekStr = week.toString().padStart(2, '0');
-            
-            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-            const p1 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 5)) % chars.length]).join('');
-            const p2 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 3 + 7)) % chars.length]).join('');
-            const p3 = Array.from({length: 4}, (_, i) => chars[(hash >> (i * 4 + 11)) % chars.length]).join('');
-            const checksum = ((hash % 89) + 10).toString();
-            
-            return `BERT-${p1}-${p2}-${p3}-${weekStr}${checksum}`;
         }
         
         function copyToken() {
