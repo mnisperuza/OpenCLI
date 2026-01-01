@@ -1,8 +1,7 @@
 # BERT CLI
 
-**A Friendly, local AI assistant by Biwa**
+**A Friendly, local AI assistant by Amphydia**
 
-![Biwa](https://img.shields.io/badge/Biwa-5F6F64?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAAA6ElEQVR42o3SMS8FURAF4G/3PiIReWhVGhGJPJVKSCSC8iUKCoUoxB/QiFbtf+g14gdQUiF50YiSTkHQzMqz1q7T3JMz98zcmbnJT2TIMYoDrOEZTxGrRXFhDPu4wkTojeZ+zGA8eK5MSujXN3EY/KPG8x1o4wj3uMYJhiOWsor+PjGJFSzjDC9Yx1sk6KWSKUMHC/GsV9zgISb9iGm0WhXGLkaQMBhnG3O4xSo6WcUaBrCLbbyjh6FIMoVTHNetYQN3WMIsLrFXKvJrQEXvW7jAOXaKiTZ9hKL/eSyWtEakP/i/kFeZvgBS0h/GkIM2hAAAAABJRU5ErkJggg==&logoColor=white)
 ![BERT CLI](https://img.shields.io/badge/Bert-CLI-598556?style=for-the-badge)
 ![Version](https://img.shields.io/badge/version-1.0.0-96C3A3?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)
@@ -19,7 +18,7 @@
 
 **¡BERT CLI is now officially out of Beta phase!**
 
-Visit berts Official GitHub Page here: [Bert CLI official Page](https://mnisperuza.github.io/bert-cli/)
+Visit berts Official GitHub Page here: [Bert CLI official Page](amphydia.github.io/bert-cli/)
 
 
 ## ⚖️ Legal & Licensing
@@ -84,7 +83,7 @@ Then run bert and use:
 - ✅ **Weekly Token System** — 20K tokens free per week
 - ✅ **Gradient UI** — Beautiful color-coded model names
 
->For more info visit:  [Bert CLI official Page](https://mnisperuza.github.io/bert-cli/)
+>For more info visit:  [Bert CLI official Page](amphydia.github.io/bert-cli/)
 
 ---
 
@@ -169,9 +168,9 @@ bert --del
 
 ## Support
 
-- **GitHub Issues**: [github.com/mnisperuza/bert-cli/issues](https://github.com/mnisperuza/bert-cli/issues)
+- **GitHub Issues**: [github.com/mnisperuza/bert-cli/issues](amphydia.github.io/bert-cli/issues)
 
-- **Email**: biwaindustries@gmail.com
+- **Email**: mnisperuza1102@gmail.com
 
 When reporting issues, include:
 1. Bert version (`bert --ver`)
@@ -183,8 +182,8 @@ When reporting issues, include:
 ---
 Thanks for Using Bert CLI ❤️
 
-**Built with restraint and long-term intent.**  
-**Biwa — 2025**
+**Reliable as always.**  
+**Amphydia — 2025**
 
 ---
 

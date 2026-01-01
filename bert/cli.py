@@ -1,20 +1,7 @@
 """
 BERT CLI v1.0.0
-══════════════════════════════════════════════════════════════════════════════
-✅ Animated gradient banner
-✅ Model loads after banner (not on first question)
-✅ /*think mode with visual box (only bert main)
-✅ Token counting only for response
 
-Models:
-  bert nano      → LiquidAI/LFM2-350M
-  bert mini      → LiquidAI/LFM2-1.2B
-  bert / main    → Qwen/Qwen3-1.7B (thinking enabled)
-  bert max       → LiquidAI/LFM2-2.6B-Exp
-  bert coder     → deepseek-ai/deepseek-coder-1.3b-instruct
-  bert maxcoder  → Qwen/Qwen2.5-3B-Instruct
-
-By Biwa — 2025
+By Amphydia — 2025
 ══════════════════════════════════════════════════════════════════════════════
 """
 
@@ -350,9 +337,9 @@ class BertCLI:
         "bert": ("Bert Main", "Qwen3-1.7B", "main", True),
         "1": ("Bert Main", "Qwen3-1.7B", "main", True), 
         "max": ("Bert Max", "LFM2-2.6B-Exp", "max", False),
-        "coder": ("Bert Coder", "DeepSeek-1.3B", "coder", False),
+        "coder": ("Bert Coder", "Qwen2.5 coder 1.5B instruct", "coder", False),
         "maxcoder": ("Bert Max-Coder", "Qwen2.5-3B-Instruct", "maxcoder", False),
-        "max-coder": ("Bert Max-Coder", "Qwen2.5-3B-Instruct", "maxcoder", False),
+        "max-coder": ("Bert Max-Coder", "Qwen2.5 coder-3B-Instruct", "maxcoder", False),
     }
     
     PLACEHOLDERS = [
@@ -771,8 +758,8 @@ class BertCLI:
     {mini}      {Colors.DIM}LFM2-1.2B (balanced){Colors.RESET}
     {main}      {Colors.DIM}Qwen3-1.7B (thinking 🧠){Colors.RESET}
     {max_m}       {Colors.DIM}LFM2-2.6B(reasoning){Colors.RESET}
-    {coder}     {Colors.DIM}DeepSeek-1.3B (code){Colors.RESET}
-    {maxcoder}  {Colors.DIM}Qwen2.5-3B-Instruct (heavy code){Colors.RESET}
+    {coder}     {Colors.DIM} Qwen 2.5 coder 1.5B-Instruct (code){Colors.RESET}
+    {maxcoder}  {Colors.DIM}Qwen2.5 coder-3B-Instruct (heavy code){Colors.RESET}
 
   {Colors.BOLD}Quantization:{Colors.RESET}
     bert int4      {Colors.DIM}Balanced ⭐{Colors.RESET}

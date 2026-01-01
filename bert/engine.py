@@ -1,25 +1,8 @@
 """
 Bert Core Engine v1.0.0
-══════════════════════════════════════════════════════════════════════════════
-Features:
-  - ESC interrupt mid-generation
-  - Token-by-token streaming
-  - Thinking-tree visibility (Qwen models)
-  - Path-aware file inspection
-  - Automatic context compression
-  - Accurate token accounting
-  - Weekly token quotas
 
-Models:
-  - Bert Nano:      Qwen/Qwen2.5-0.5B-Instruct
-  - Bert Mini:      Qwen/Qwen2.5-Coder-1.5B-Instruct
-  - Bert Main:      meta-llama/Llama-3.2-3B-Instruct
-  - Bert Max:       microsoft/Phi-4-mini-instruct
-  - Bert Coder:     Qwen/Qwen2.5-Coder-3B-Instruct
-  - Bert Max-Coder: deepseek-ai/deepseek-coder-7b-instruct-v1.5
+By Amphydia — 2025
 
-By Biwa — 2025
-══════════════════════════════════════════════════════════════════════════════
 """
 
 import os
@@ -790,7 +773,7 @@ class BertEngine:
             "temp": 0.7,
             "context": 32768,
             "vram": "~4GB",
-            "has_thinking": False,
+            "has_thinking": True,
         },
         "main": {
             "path": "Qwen/Qwen3-1.7B",

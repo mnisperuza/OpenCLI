@@ -4,7 +4,7 @@ Bert Error Logger
 Logs errors to ~/.bert/errors.log for debugging and support.
 Users can share this file manually when reporting issues.
 
-By Biwa — 2025
+By Amphydia — 2025
 ══════════════════════════════════════════════════════════════════════════════
 """
 

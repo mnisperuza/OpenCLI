@@ -1,5 +1,5 @@
 """
-Bert CLI — A calm, local AI assistant by Biwa
+Bert CLI — A calm, local AI assistant by Amphydia
 Version 1.0.0 (Stable)
 """
 

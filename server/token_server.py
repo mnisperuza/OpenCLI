@@ -1,13 +1,7 @@
 """
-Bert Token Server
-══════════════════════════════════════════════════════════════════════════════
-Server-side token validation with PostgreSQL storage.
-Handles: token claiming, validation, usage tracking, weekly resets.
+Token server 
 
-Deploy: Vercel, Railway, Render, or any Python hosting
-Database: PostgreSQL (Supabase, Neon, Railway, etc.)
-
-By Biwa — 2025
+By Amphydia — 2025
 ══════════════════════════════════════════════════════════════════════════════
 """
 

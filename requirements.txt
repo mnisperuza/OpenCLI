@@ -1,5 +1,5 @@
 # Bert CLI v1.0.0 — Dependencies
-# By Biwa — 2025
+# By Amphydia — 2025
 # Cross-platform: Windows, Linux, macOS
 # ═══════════════════════════════════════════════════════════════════════════════
 
