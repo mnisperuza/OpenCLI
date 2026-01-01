@@ -18,7 +18,7 @@
 
 **¡BERT CLI is now officially out of Beta phase!**
 
-Visit berts Official GitHub Page here: [Bert CLI official Page](amphydia.github.io/bert-cli/)
+Visit berts Official GitHub Page here: [Bert CLI official Page](https://amphydia.github.io/bert-cli/)
 
 
 ## ⚖️ Legal & Licensing
@@ -83,7 +83,7 @@ Then run bert and use:
 - ✅ **Weekly Token System** — 20K tokens free per week
 - ✅ **Gradient UI** — Beautiful color-coded model names
 
->For more info visit:  [Bert CLI official Page](amphydia.github.io/bert-cli/)
+>For more info visit:  [Bert CLI official Page](https://amphydia.github.io/bert-cli/)
 
 ---
 
