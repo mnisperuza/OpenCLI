@@ -168,7 +168,7 @@ bert --del
 
 ## Support
 
-- **GitHub Issues**: [github.com/mnisperuza/bert-cli/issues](amphydia.github.io/bert-cli/issues)
+- **GitHub Issues**: [github.com/Amphydia/bert-cli/issues](https://github.com/Amphydia/bert-cli/issues)
 
 - **Email**: mnisperuza1102@gmail.com
 
