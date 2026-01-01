@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bert-cli"
-version = "1.0.0"
-description = "Bert — A Friendly, local AI assistant by Biwa"
+version = "1.0.5"
+description = "Bert — A Friendly, local AI assistant by Amphydia"
 readme = "README.md"
 license = {text = "Proprietary"}
 authors = [
-    {name = "Biwa", email = "biwaindustries@gmail.com"}
+    {name = "Amphydia", email = "mnisperuza1102@gmail.com"}
 ]
 requires-python = ">=3.8"
 classifiers = [
@@ -29,7 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["ai", "assistant", "llm", "local", "cli", "qwen", "llama", "deepseek", "bert", "biwa"]
+keywords = ["ai", "assistant", "llm", "local", "cli", "qwen","Amphydia"]
 
 # Core dependencies
 dependencies = [
@@ -54,10 +54,10 @@ full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25"]
 bert = "bert.cli:main"
 
 [project.urls]
-Homepage = "https://mnisperuza.github.io/bert-cli/"
-Documentation = "https://github.com/mnisperuza/bert-cli#readme"
-Repository = "https://github.com/mnisperuza/bert-cli"
-Issues = "https://github.com/mnisperuza/bert-cli/issues"
+Homepage = "https://amphydia.github.io/bert-cli/"
+Documentation = "https://github.com/Amphydia/bert-cli#readme"
+Repository = "https://github.com/Amphydia/bert-cli"
+Issues = "https://github.com/Amphydia/bert-cli"
 
 [tool.setuptools.packages.find]
 where = ["."]

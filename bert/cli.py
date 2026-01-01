@@ -393,7 +393,7 @@ class BertCLI:
         animate_banner(centered_lines, duration=1.8)
         
         print()
-        print(f"{Colors.DIM}{'by Biwa — 2025'.center(width)}{Colors.RESET}")
+        print(f"{Colors.DIM}{'by Amphydia — 2025'.center(width)}{Colors.RESET}")
         print(f"{Colors.DIM}{f'Version {self.VERSION}'.center(width)}{Colors.RESET}")
         print()
     
