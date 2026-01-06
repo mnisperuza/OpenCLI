@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>About Me</title>
-    <meta name="description" content="I am focused on Building useful systems">
+    <title>About — Matias Nisperuza</title>
+    <meta name="description" content="About Matias Nisperuza, creator of Bert CLI. Developer from Colombia focused on AI systems and developer tools.">
     
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 400 400' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M72.4336 193.066C73.6055 177.351 79.087 152.855 85.0459 138.436C127.145 36.5836 347.246 178.391 242.523 261.263C225.56 274.685 192.657 282.179 171.015 273.815C141.434 262.378 102.824 178.677 144.974 158.417C184.232 139.544 229.58 173.915 219.984 215.483C204.326 283.305 123.069 176.428 183.344 197.588M145.303 249.894C218.545 365.441 374.063 242.911 313.654 154.816' stroke='%235F6F64' stroke-width='16' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     
@@ -105,23 +105,6 @@
             z-index: -1;
         }
         
-        
-        .sr-only {
-            position: absolute;
-            width: 1px;
-            height: 1px;
-            padding: 0;
-            margin: -1px;
-            overflow: hidden;
-            clip: rect(0, 0, 0, 0);
-            border: 0;
-        }
-        
-        @keyframes float {
-            0%, 100% { transform: translateY(0) rotate(0deg); }
-            50% { transform: translateY(-12px) rotate(2deg); }
-        }
-        
         .hero h1 {
             font-size: clamp(2.5rem, 6vw, 4rem);
             font-weight: 300;
@@ -143,6 +126,12 @@
             max-width: 600px;
             opacity: 0.8;
             line-height: 1.9;
+        }
+        
+        .hero .location {
+            font-size: 0.95rem;
+            opacity: 0.6;
+            margin-top: 1rem;
         }
         
         /* Main Content */
@@ -179,44 +168,51 @@
             font-size: 1.05rem;
         }
         
-        /* Values */
-        .values-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 2rem;
-            margin: 2rem 0;
+        /* Skills Grid */
+        .skills-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin: 1.5rem 0;
         }
         
-        .value-card {
+        .skill-tag {
             background: white;
-            border-radius: 12px;
-            padding: 2rem;
-            box-shadow: 0 2px 20px rgba(95, 111, 100, 0.08);
-            border-top: 3px solid var(--sage-light);
-            transition: transform 0.2s, box-shadow 0.2s;
+            border: 1px solid var(--sage-pale);
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            color: var(--sage-dark);
         }
         
-        .value-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 8px 30px rgba(95, 111, 100, 0.12);
+        /* Certifications */
+        .cert-list {
+            list-style: none;
+            margin: 1.5rem 0;
         }
         
-        .value-card .icon {
-            font-size: 2rem;
-            margin-bottom: 1rem;
+        .cert-list li {
+            padding: 1rem 0;
+            border-bottom: 1px solid rgba(95, 111, 100, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
         }
         
-        .value-card h3 {
-            font-size: 1.15rem;
+        .cert-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .cert-name {
             font-weight: 500;
             color: var(--sage-dark);
-            margin-bottom: 0.75rem;
         }
         
-        .value-card p {
-            font-size: 0.95rem;
-            margin: 0;
-            opacity: 0.75;
+        .cert-issuer {
+            font-size: 0.9rem;
+            opacity: 0.6;
         }
         
         /* Projects */
@@ -241,58 +237,59 @@
         }
         
         .project-info h3 {
-            font-size: 1.5rem;
+            font-size: 1.4rem;
             font-weight: 500;
-            color: var(--sage-dark);
-            margin-bottom: 0.5rem;
+            color: var(--charcoal);
+            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             gap: 0.75rem;
+            flex-wrap: wrap;
         }
         
-        .project-info .badge {
+        .badge {
             font-size: 0.7rem;
-            padding: 0.25rem 0.6rem;
             background: var(--sage-light);
             color: white;
-            border-radius: 4px;
-            font-weight: 500;
+            padding: 0.25rem 0.75rem;
+            border-radius: 12px;
             text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
         }
         
-        .project-info .badge.coming {
+        .badge.coming {
             background: var(--sage-mid);
         }
         
         .project-info .description {
-            font-size: 0.95rem;
-            color: var(--charcoal);
+            font-size: 1rem;
             opacity: 0.8;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
         }
         
-        .project-info .tech {
+        .tech {
             display: flex;
-            gap: 0.5rem;
             flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 1rem;
         }
         
-        .project-info .tech span {
-            font-size: 0.8rem;
-            padding: 0.3rem 0.75rem;
+        .tech span {
+            font-size: 0.75rem;
             background: var(--bone-dark);
-            border-radius: 20px;
-            color: var(--charcoal);
+            padding: 0.35rem 0.75rem;
+            border-radius: 6px;
+            color: var(--sage-dark);
         }
         
         .project-visual {
             background: var(--cosmic);
             border-radius: 12px;
             padding: 1.5rem;
-            font-family: 'Source Code Pro', monospace;
+            font-family: 'SF Mono', 'Fira Code', monospace;
             font-size: 0.85rem;
-            color: var(--sage-pale);
-            line-height: 1.5;
+            color: #aaa;
             overflow: hidden;
         }
         
@@ -417,7 +414,6 @@
             main { padding: 0 1.5rem 3rem; }
             .project-card { grid-template-columns: 1fr; }
             .project-card.reverse { direction: ltr; }
-            .values-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -438,13 +434,69 @@
     </nav>
 
     <!-- Hero -->
-        <h1 class="sr-only">About Me</h1>
-        <p class="tagline">Raising Dev</p>
-        <p>I like to learn while Building Reliable systems.</p>
+    <section class="hero">
+        <div class="hero-bg"></div>
+        <h1>Matias Nisperuza</h1>
+        <p class="tagline">Developer & AI Enthusiast</p>
+        <p>I build developer tools and AI systems. Currently focused on making local AI accessible through clean, reliable interfaces.</p>
+        <p class="location">📍 Bogotá D.C., Colombia</p>
     </section>
 
     <main>
+        <!-- About -->
+        <section>
+            <h2>About Me</h2>
+            <p>I'm a self-taught developer from Colombia, currently in 11th grade. I believe technical depth is driven by curiosity, not age—if a system exists, I want to understand its core; if it doesn't, I'll build it.</p>
+            <p>My focus is on AI systems and developer tools. I specialize in building things that work reliably on consumer hardware, because good tools shouldn't require expensive infrastructure.</p>
+            <p>My goal is to evolve into a Fullstack Engineer and AI Developer—bridging the gap between robust, scalable architectures and the cutting-edge frontiers of artificial intelligence.</p>
+        </section>
         
+        <!-- Skills -->
+        <section>
+            <h2>Technical Stack</h2>
+            <div class="skills-grid">
+                <span class="skill-tag">Python</span>
+                <span class="skill-tag">PyTorch</span>
+                <span class="skill-tag">Transformers</span>
+                <span class="skill-tag">HuggingFace</span>
+                <span class="skill-tag">Flask</span>
+                <span class="skill-tag">Git</span>
+                <span class="skill-tag">Local LLMs</span>
+                <span class="skill-tag">Prompt Engineering</span>
+            </div>
+            <p style="margin-top: 1.5rem;">Also learning: JavaScript, HTML/CSS, and fullstack web development.</p>
+        </section>
+        
+        <!-- Certifications -->
+        <section>
+            <h2>Certifications</h2>
+            <ul class="cert-list">
+                <li>
+                    <div>
+                        <span class="cert-name">Generative AI: Prompt Engineering Basics</span>
+                        <span class="cert-issuer">— IBM (Coursera)</span>
+                    </div>
+                </li>
+                <li>
+                    <div>
+                        <span class="cert-name">Developing Interpersonal Skills</span>
+                        <span class="cert-issuer">— IBM (Coursera)</span>
+                    </div>
+                </li>
+                <li>
+                    <div>
+                        <span class="cert-name">Machine Learning Crash Course</span>
+                        <span class="cert-issuer">— Google</span>
+                    </div>
+                </li>
+                <li>
+                    <div>
+                        <span class="cert-name">English Proficiency — C2 Proficient</span>
+                        <span class="cert-issuer">— EF SET</span>
+                    </div>
+                </li>
+            </ul>
+        </section>
         
         <!-- Projects -->
         <section>
@@ -454,10 +506,10 @@
                 <div class="project-info">
                     <h3>
                         Bert CLI
-                        <span class="badge">CLI Framework</span>
+                        <span class="badge">Main Project</span>
                     </h3>
-                    <p class="description">A local CLI Framework assistant that runs entirely on your machine. Just you and a helpful Decoder Framework.</p>
-                    <p class="description">Bert features 6 specialized models, thinking mode, file references, and a beautiful terminal interface with animated gradients.</p>
+                    <p class="description">A developer-friendly CLI tool that brings local AI to your terminal. Runs entirely on your machine—no cloud, no API keys, just you and a helpful assistant.</p>
+                    <p class="description">Features 6 specialized models, thinking mode, file references, and a beautiful terminal interface with animated gradients.</p>
                     <div class="tech">
                         <span>Python</span>
                         <span>PyTorch</span>
@@ -487,31 +539,68 @@ The [::-1] slice steps backwards through the entire string.
             <div class="project-card reverse">
                 <div class="project-info">
                     <h3>
-                        HCGK-Kernel
+                        HCGK Kernel
                         <span class="badge coming">Active</span>
                     </h3>
-                    <p class="description">hardware authorization system designed to prevent AI model loading failures by validating system resources before execution.</p>
+                    <p class="description">Hardware Control Gatekeeper Kernel—a hardware authorization system that validates system resources before loading AI models to prevent crashes and OOM failures.</p>
+                    <p class="description">Available on PyPI: <code>pip install hcgk-kernel</code></p>
                     <div class="tech">
-                        <span>AI</span>
-                        <span>Infrastructure</span>
+                        <span>Python</span>
+                        <span>PyPI</span>
+                        <span>AI Infrastructure</span>
                     </div>
+                    <a href="https://github.com/mnisperuza/hcgk-kernels" class="project-link" target="_blank">
+                        View on GitHub →
+                    </a>
                 </div>
                 <div class="project-visual" style="display: flex; align-items: center; justify-content: center; min-height: 150px;">
-                    <span style="font-size: 1.1rem; opacity: 0.5;">Active Via PyPI✅</span>
+                    <span style="font-size: 1.1rem; opacity: 0.5;">Available on PyPI ✅</span>
+                </div>
+            </div>
+            
+            <div class="project-card">
+                <div class="project-info">
+                    <h3>
+                        TinyGPT
+                        <span class="badge coming">Learning</span>
+                    </h3>
+                    <p class="description">A lightweight GPT-style model focused on understanding transformer mechanics and hyperparameter tuning. Built for learning, not production.</p>
+                    <div class="tech">
+                        <span>PyTorch</span>
+                        <span>Transformers</span>
+                        <span>ML Research</span>
+                    </div>
+                    <a href="https://github.com/mnisperuza/TinyGPT-Custom" class="project-link" target="_blank">
+                        View on GitHub →
+                    </a>
+                </div>
+                <div class="project-visual" style="display: flex; align-items: center; justify-content: center; min-height: 150px;">
+                    <span style="font-size: 1.1rem; opacity: 0.5;">Educational Project 📚</span>
                 </div>
             </div>
         </section>
         
+        <!-- Quote -->
+        <div class="quote-section">
+            <blockquote>
+                "I don't just want to use AI; I want to engineer the environments where it lives and thrives."
+            </blockquote>
+            <cite>— My goal</cite>
+        </div>
+        
         <!-- Contact -->
         <section class="contact-section">
             <h2>Get in Touch</h2>
-            <p>Have questions, feedback, or just want to say hello?</p>
+            <p>Have questions, feedback, or want to collaborate?</p>
             <div class="contact-links">
                 <a href="mailto:mnisperuza1102@gmail.com">
                     <span>📧</span> mnisperuza1102@gmail.com
                 </a>
                 <a href="https://github.com/mnisperuza" target="_blank">
                     <span>💻</span> GitHub
+                </a>
+                <a href="https://x.com/MatiasNispX" target="_blank">
+                    <span>🐦</span> @MatiasNispX
                 </a>
                 <a href="https://github.com/mnisperuza/bert-cli/issues" target="_blank">
                     <span>🐛</span> Report an Issue
@@ -521,8 +610,8 @@ The [::-1] slice steps backwards through the entire string.
     </main>
     
     <footer>
-        <p><a href="index.html">Bert CLI</a> · <a href="docs.html">Docs</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a> · <a href="about.html">About</a></p>
-        <p class="copyright">© 2026 Bert CLI</p>
+        <p><a href="index.html">Bert CLI</a> · <a href="docs.html">Docs</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></p>
+        <p class="copyright">© 2025 Matias Nisperuza</p>
     </footer>
 </body>
 </html>
