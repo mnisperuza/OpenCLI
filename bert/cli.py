@@ -1,8 +1,14 @@
 """
-BERT CLI v1.0.0
+BERT CLI v1.2.0
 
-By Amphydia — 2025
+By Matias Nisperuza 
 ══════════════════════════════════════════════════════════════════════════════
+
+New in v1.2.0:
+- Fixed paste support
+- Gemini CLI-style clean input prompt  
+- Terminal color themes: -color light / -color dark
+- Multiline paste mode: /*paste
 """
 
 import os
@@ -22,7 +28,23 @@ os.environ['PYTHONWARNINGS'] = 'ignore'
 IS_WINDOWS = sys.platform == 'win32'
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# KEYBOARD INPUT HANDLING (Cross-platform)
+# TEXTUAL IMPORTS (for styled input)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+TEXTUAL_AVAILABLE = False
+try:
+    from textual.app import App, ComposeResult
+    from textual.widgets import Static, Input, TextArea
+    from textual.containers import Container, Vertical
+    from textual.css.query import NoMatches
+    from textual import events
+    from textual.binding import Binding
+    TEXTUAL_AVAILABLE = True
+except ImportError:
+    pass
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KEYBOARD INPUT HANDLING (Cross-platform fallback)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if IS_WINDOWS:
@@ -54,7 +76,7 @@ def check_for_esc() -> bool:
 
 
 def get_input_line(prompt: str = "") -> str:
-    """Get a line of input, handling paste correctly."""
+    """Fallback input method when Textual is not available."""
     if prompt:
         print(prompt, end='', flush=True)
     
@@ -68,23 +90,87 @@ def get_input_line(prompt: str = "") -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ENGINE IMPORT
+# ENGINE IMPORT (Robust - multiple fallback strategies)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 ENGINE_AVAILABLE = False
-try:
-    from engine import get_engine, BertEngine, get_token_manager, get_interrupt_handler
-    ENGINE_AVAILABLE = True
-except ImportError:
+_engine_module = None
+
+def _import_engine():
+    """Robust engine import with multiple fallback strategies."""
+    global ENGINE_AVAILABLE, _engine_module
+    
+    # Get the directory where THIS script is located
     try:
-        from bert.engine import get_engine, BertEngine, get_token_manager, get_interrupt_handler
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    except NameError:
+        script_dir = os.getcwd()
+    
+    # Add script directory to sys.path if not already there
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    
+    # Strategy 1: Direct import
+    try:
+        import engine as eng
+        _engine_module = eng
         ENGINE_AVAILABLE = True
+        return True
     except ImportError:
         pass
+    
+    # Strategy 2: Package import (bert.engine)
+    try:
+        import bert.engine as eng
+        _engine_module = eng
+        ENGINE_AVAILABLE = True
+        return True
+    except ImportError:
+        pass
+    
+    # Strategy 3: importlib direct file load
+    try:
+        import importlib.util
+        engine_path = os.path.join(script_dir, 'engine.py')
+        
+        if os.path.exists(engine_path):
+            spec = importlib.util.spec_from_file_location("engine", engine_path)
+            eng = importlib.util.module_from_spec(spec)
+            sys.modules['engine'] = eng
+            spec.loader.exec_module(eng)
+            _engine_module = eng
+            ENGINE_AVAILABLE = True
+            return True
+    except Exception:
+        pass
+    
+    return False
+
+
+def get_engine():
+    """Get engine instance."""
+    if _engine_module and hasattr(_engine_module, 'get_engine'):
+        return _engine_module.get_engine()
+    return None
+
+def get_token_manager():
+    """Get token manager instance."""
+    if _engine_module and hasattr(_engine_module, 'get_token_manager'):
+        return _engine_module.get_token_manager()
+    return None
+
+def get_interrupt_handler():
+    """Get interrupt handler instance."""
+    if _engine_module and hasattr(_engine_module, 'get_interrupt_handler'):
+        return _engine_module.get_interrupt_handler()
+    return None
+
+# Run import at module load
+_import_engine()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# COLORS
+# COLORS & TERMINAL THEMES
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class Colors:
@@ -105,9 +191,122 @@ class Colors:
     CYAN = "\033[96m"
     WHITE = "\033[97m"
     
+    # Dark Sage palette
+    SAGE = "\033[38;2;95;140;110m"
+    SAGE_LIGHT = "\033[38;2;130;175;145m"
+    SAGE_DARK = "\033[38;2;60;90;70m"
+    SAGE_DIM = "\033[38;2;80;110;90m"
+    
+    # Background colors for themes
+    BG_DARK = "\033[48;2;0;0;0m"           # Pitch black
+    BG_LIGHT = "\033[48;2;245;245;240m"    # Bone white
+    BG_SAGE_DARK = "\033[48;2;25;35;28m"   # Dark sage background
+    
+    # Foreground for themes
+    FG_DARK = "\033[38;2;220;220;220m"     # Light text for dark bg
+    FG_LIGHT = "\033[38;2;30;30;30m"       # Dark text for light bg
+    
     @staticmethod
     def rgb(r, g, b):
         return f"\033[38;2;{max(0,min(255,int(r)))};{max(0,min(255,int(g)))};{max(0,min(255,int(b)))}m"
+    
+    @staticmethod
+    def bg_rgb(r, g, b):
+        return f"\033[48;2;{max(0,min(255,int(r)))};{max(0,min(255,int(g)))};{max(0,min(255,int(b)))}m"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TERMINAL THEME MANAGER
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TerminalTheme:
+    """Manages terminal color themes (dark/light mode)"""
+    
+    DARK = "dark"
+    LIGHT = "light"
+    
+    # Theme definitions - FIXED: Light mode has darker text for visibility
+    THEMES = {
+        "dark": {
+            "name": "Dark",
+            "background": (0, 0, 0),          # Pitch black
+            "foreground": (220, 220, 220),    # Light gray
+            "accent": (130, 175, 145),        # Sage green
+            "dim": (100, 100, 100),
+        },
+        "light": {
+            "name": "Light", 
+            "background": (245, 245, 240),    # Bone white
+            "foreground": (25, 25, 25),       # DARKER - near black for visibility
+            "accent": (40, 70, 50),           # DARKER sage for contrast on white
+            "dim": (90, 90, 90),              # DARKER dim for visibility
+        }
+    }
+    
+    def __init__(self):
+        self.current_theme = self.DARK
+    
+    def set_theme(self, theme: str) -> bool:
+        """Set terminal theme (dark/light)"""
+        theme = theme.lower().strip()
+        
+        if theme not in self.THEMES:
+            return False
+        
+        self.current_theme = theme
+        self._apply_theme()
+        return True
+    
+    def _apply_theme(self):
+        """Apply the current theme to the terminal"""
+        theme = self.THEMES[self.current_theme]
+        bg = theme["background"]
+        fg = theme["foreground"]
+        
+        # Set background color for entire screen
+        # OSC 11 sets background, OSC 10 sets foreground (works in most terminals)
+        bg_hex = f"#{bg[0]:02x}{bg[1]:02x}{bg[2]:02x}"
+        fg_hex = f"#{fg[0]:02x}{fg[1]:02x}{fg[2]:02x}"
+        
+        # OSC sequences for terminal emulators (works in iTerm2, Windows Terminal, etc.)
+        print(f"\033]11;{bg_hex}\033\\", end='', flush=True)  # Background
+        print(f"\033]10;{fg_hex}\033\\", end='', flush=True)  # Foreground
+        
+        # Also use ANSI for broader compatibility
+        print(f"\033[48;2;{bg[0]};{bg[1]};{bg[2]}m", end='', flush=True)
+        print(f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m", end='', flush=True)
+        
+        # Clear screen with new background
+        if IS_WINDOWS:
+            os.system('cls')
+        else:
+            # Clear and reset scroll position
+            print("\033[2J\033[H", end='', flush=True)
+    
+    def reset_theme(self):
+        """Reset to default terminal colors"""
+        print("\033]110\033\\", end='', flush=True)  # Reset foreground
+        print("\033]111\033\\", end='', flush=True)  # Reset background
+        print(Colors.RESET, end='', flush=True)
+    
+    def get_fg_color(self) -> str:
+        """Get current theme's foreground color code"""
+        fg = self.THEMES[self.current_theme]["foreground"]
+        return f"\033[38;2;{fg[0]};{fg[1]};{fg[2]}m"
+    
+    def get_accent_color(self) -> str:
+        """Get current theme's accent (sage) color code"""
+        accent = self.THEMES[self.current_theme]["accent"]
+        return f"\033[38;2;{accent[0]};{accent[1]};{accent[2]}m"
+    
+    def get_dim_color(self) -> str:
+        """Get current theme's dim color code"""
+        dim = self.THEMES[self.current_theme]["dim"]
+        return f"\033[38;2;{dim[0]};{dim[1]};{dim[2]}m"
+
+
+# Global theme instance
+_theme = TerminalTheme()
 
 
 def supports_color():
@@ -124,7 +323,7 @@ def term_width():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# GRADIENTS (per model family)
+# GRADIENTS (per model family) - Updated with theme-aware colors
 # ═══════════════════════════════════════════════════════════════════════════════
 
 GRADIENTS = {
@@ -169,6 +368,28 @@ FAMILY_COLORS = {
     "coder": (100, 205, 220),  # Cyan
     "maxcoder": (200, 210, 220),  # Silver
 }
+
+# Theme-aware input bar colors
+def get_input_bar_colors() -> dict:
+    """Get input bar colors appropriate for current theme."""
+    if _theme.current_theme == "light":
+        # LIGHT MODE: Dark colors on bone white background
+        return {
+            "border": (60, 90, 70),          # Dark sage border
+            "background": (230, 235, 232),   # Light sage-tinted white
+            "text": (20, 30, 25),            # Very dark text for visibility
+            "placeholder": (100, 120, 110),  # Medium gray-sage
+            "cursor": (40, 70, 50),          # Dark sage cursor
+        }
+    else:
+        # DARK MODE: Light colors on black background
+        return {
+            "border": (80, 120, 95),         # Medium sage border
+            "background": (25, 35, 28),      # Very dark sage bg
+            "text": (200, 220, 210),         # Light sage text
+            "placeholder": (100, 130, 115),  # Muted sage
+            "cursor": (130, 175, 145),       # Bright sage
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -292,6 +513,103 @@ def gradient_text(text, family):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STYLED INPUT (Paste-Friendly Gemini-Style)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def get_styled_input(placeholder: str = "Type your message...", 
+                     multiline: bool = False,
+                     context_bar: str = "") -> str:
+    """
+    Get styled input - PASTE-FRIENDLY VERSION.
+    
+    The box-with-cursor approach breaks paste. This version uses:
+    - Decorative header line (visual only)
+    - Standard input below (handles any paste length)
+    
+    This is inspired by Gemini CLI's clean approach.
+    """
+    
+    # Get theme-aware colors
+    colors = get_input_bar_colors()
+    
+    border = colors["border"]
+    text_color = colors["text"]
+    placeholder_color = colors["placeholder"]
+    
+    bc = f"\033[38;2;{border[0]};{border[1]};{border[2]}m"
+    tc = f"\033[38;2;{text_color[0]};{text_color[1]};{text_color[2]}m"
+    plc = f"\033[38;2;{placeholder_color[0]};{placeholder_color[1]};{placeholder_color[2]}m"
+    
+    # Get prompt icon color (sage - theme aware)
+    if _theme.current_theme == "light":
+        sage = (60, 100, 75)  # Darker sage for light mode
+    else:
+        sage = FAMILY_COLORS["nano"]  # Normal sage for dark mode
+    prompt_color = f"\033[38;2;{sage[0]};{sage[1]};{sage[2]}m"
+    
+    # Show context bar if provided
+    if context_bar:
+        print(context_bar)
+    
+    if multiline:
+        # === MULTILINE MODE ===
+        # For pasting large texts - press Enter twice to submit
+        
+        print(f"\n{bc}─── Paste Mode (press Enter twice to submit) ───{Colors.RESET}")
+        sys.stdout.write(f"{prompt_color}❯{Colors.RESET} {tc}")
+        sys.stdout.flush()
+        
+        lines = []
+        empty_count = 0
+        first_line = True
+        
+        try:
+            while True:
+                if first_line:
+                    line = input()
+                    first_line = False
+                else:
+                    # Continuation prompt
+                    sys.stdout.write(f"{prompt_color}│{Colors.RESET} {tc}")
+                    sys.stdout.flush()
+                    line = input()
+                
+                if line == "":
+                    empty_count += 1
+                    if empty_count >= 2:
+                        break
+                else:
+                    empty_count = 0
+                    lines.append(line)
+        except (EOFError, KeyboardInterrupt):
+            pass
+        
+        sys.stdout.write(Colors.RESET)
+        print(f"{bc}─── End ───{Colors.RESET}\n")
+        
+        return "\n".join(lines)
+    
+    else:
+        # === SINGLE LINE MODE - PASTE FRIENDLY ===
+        # No box around input = paste works perfectly
+        
+        # Just show a clean sage prompt
+        # Input is NOT inside a box, so any length paste works
+        print()  # Blank line for spacing
+        sys.stdout.write(f"{prompt_color}❯{Colors.RESET} {tc}")
+        sys.stdout.flush()
+        
+        try:
+            user_input = input()
+        except (EOFError, KeyboardInterrupt):
+            user_input = ""
+        
+        sys.stdout.write(Colors.RESET)
+        
+        return user_input
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # THINKING BOX
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -308,13 +626,11 @@ def print_thinking_box(thinking_content: str):
     display_lines = lines[-6:] if len(lines) > 6 else lines
     
     for line in display_lines:
-        # Truncate if too long
         if len(line) > max_width - 4:
             line = line[:max_width - 7] + "..."
         padding = max_width - len(line) - 2
         print(f"{Colors.DIM}│{Colors.RESET} {Colors.ITALIC}{line}{Colors.RESET}{' ' * padding}{Colors.DIM}│{Colors.RESET}")
     
-    # Fill remaining lines if less than 6
     for _ in range(6 - len(display_lines)):
         print(f"{Colors.DIM}│{' ' * max_width}│{Colors.RESET}")
     
@@ -322,20 +638,20 @@ def print_thinking_box(thinking_content: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BERT CLI
+# BERT CLI (Enhanced with styled input and themes)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class BertCLI:
-    VERSION = "1.0.0"
+    VERSION = "1.2.0"
     VERSION_NAME = "Stable"
     
     # Model info: (display_name, base_model, family, has_thinking)
     MODELS = {
         "nano": ("Bert Nano", "LFM2-700M", "nano", False),
         "mini": ("Bert Mini", "LFM2-1.2B", "mini", False),
-        "main": ("Bert Main", "Qwen3-1.7B", "main", True),  # Only this has thinking!
+        "main": ("Bert Main", "Qwen3-1.7B", "main", True),
         "bert": ("Bert Main", "Qwen3-1.7B", "main", True),
-        "1": ("Bert Main", "Qwen3-1.7B", "main", True), 
+        "1": ("Bert Main", "Qwen3-1.7B", "main", True),
         "max": ("Bert Max", "LFM2-2.6B-Exp", "max", False),
         "coder": ("Bert Coder", "Qwen2.5 coder 1.5B instruct", "coder", False),
         "maxcoder": ("Bert Max-Coder", "Qwen2.5-3B-Instruct", "maxcoder", False),
@@ -360,8 +676,10 @@ class BertCLI:
         self.mode = "nano"
         self.quant = "int4"
         self.debug = False
-        self.thinking_mode = False  # For /*think queries
+        self.thinking_mode = False
         self._placeholder_index = 0
+        self.multiline_mode = False  # For large text paste
+        self.theme = _theme  # Terminal theme manager
         
         if ENGINE_AVAILABLE:
             self.engine = get_engine()
@@ -389,11 +707,10 @@ class BertCLI:
         width = term_width()
         centered_lines = [line.center(width) for line in lines]
         
-        # Animate the banner!
         animate_banner(centered_lines, duration=1.8)
         
         print()
-        print(f"{Colors.DIM}{'by Amphydia — 2025'.center(width)}{Colors.RESET}")
+        print(f"{Colors.DIM}{'by Matias Nisperuza — 2025'.center(width)}{Colors.RESET}")
         print(f"{Colors.DIM}{f'Version {self.VERSION}'.center(width)}{Colors.RESET}")
         print()
     
@@ -403,7 +720,9 @@ class BertCLI:
         return placeholder
     
     def prompt(self) -> str:
-        return f"{Colors.GREEN}❯{Colors.RESET} "
+        """Legacy prompt for fallback mode"""
+        sage = FAMILY_COLORS["nano"]
+        return f"\033[38;2;{sage[0]};{sage[1]};{sage[2]}m❯{Colors.RESET} "
     
     def context_bar(self) -> str:
         """Generate context bar with gradient model name"""
@@ -421,139 +740,49 @@ class BertCLI:
         bar += "]"
         return bar
     
-    def pick_quant(self, model_name, family):
-        """Quantization picker with polished UI"""
-        r, g, b = FAMILY_COLORS.get(family, FAMILY_COLORS["nano"])
-        color = f"\033[38;2;{r};{g};{b}m"
+    def handle_color_command(self, args: str) -> bool:
+        """Handle -color light / -color dark commands"""
+        args = args.lower().strip()
         
-        print(f"\n{color}┌{'─' * 48}┐{Colors.RESET}")
-        print(f"{color}│{Colors.RESET} {Colors.BOLD}🎛️  Select Quantization for {model_name}{Colors.RESET}")
-        print(f"{color}└{'─' * 48}┘{Colors.RESET}\n")
-        
-        print(f"  {Colors.DIM}[1] INT4{Colors.RESET} — Balanced ⭐ (4GB VRAM)")
-        print(f"  {Colors.DIM}[2] INT8{Colors.RESET} — High quality (6GB+)")
-        print(f"  {Colors.DIM}[3] FP16{Colors.RESET} — Best quality (8GB+)")
-        print(f"  {Colors.DIM}[4] FP32{Colors.RESET} — CPU / Full precision")
-        print(f"\n  {Colors.DIM}Press Enter for INT4{Colors.RESET}")
-        
-        try:
-            choice = input(f"  {color}Your choice (1-4):{Colors.RESET} ").strip()
-            quant_map = {"1": "int4", "2": "int8", "3": "fp16", "4": "fp32", "": "int4"}
-            selected = quant_map.get(choice, "int4")
-            print(f"\n  {Colors.GREEN}✓ Selected {selected.upper()}{Colors.RESET}")
-            return selected
-        except:
-            return "int4"
-    
-    def load_model(self, mode: str, quant: str = None, show_picker: bool = True):
-        """Load a model with animations"""
-        if not ENGINE_AVAILABLE or not self.engine:
-            print(f"{Colors.RED}✗ Engine not available{Colors.RESET}")
-            return False
-        
-        model_info = self.MODELS.get(mode, self.MODELS["nano"])
-        name, base, family, _ = model_info
-        
-        # Shimmer the model name
-        print()
-        shimmer_text(f"→ {name}", family, duration=1.0)
-        
-        # Pick quantization if needed
-        if quant is None and show_picker:
-            quant = self.pick_quant(name, family)
-        elif quant is None:
-            quant = self.quant
-        
-        # Load with spinner
-        print()
-        stop_event = threading.Event()
-        
-        thread = threading.Thread(
-            target=loading_spinner,
-            args=(f"Loading {name}...", family, stop_event)
-        )
-        thread.daemon = True
-        thread.start()
-        
-        success, message = self.engine.load_model(mode, quant)
-        
-        stop_event.set()
-        thread.join(timeout=1.0)
-        
-        if success:
-            self.mode = mode
-            self.quant = quant
-            print()
-            shimmer_text(f"✓ {name} ready!", family, duration=0.8)
-            print()
+        if args == "light":
+            self.theme.set_theme("light")
+            print(f"{Colors.GREEN}✓{Colors.RESET} Theme set to Light (bone white)")
+            return True
+        elif args == "dark":
+            self.theme.set_theme("dark")
+            print(f"{Colors.GREEN}✓{Colors.RESET} Theme set to Dark (pitch black)")
+            return True
+        elif args == "reset":
+            self.theme.reset_theme()
+            print(f"{Colors.GREEN}✓{Colors.RESET} Theme reset to default")
             return True
         else:
-            print(f"\n{Colors.RED}✗ {message}{Colors.RESET}\n")
-            return False
-    
-    def init_engine(self):
-        """Initialize engine with default model (nano) after banner"""
-        if not ENGINE_AVAILABLE:
-            print(f"{Colors.DIM}Demo mode (engine not available){Colors.RESET}\n")
-            return
-        
-        # Show device info
-        if self.engine:
-            print(f"  {Colors.DIM}🖥️  {self.engine.get_device_info()}{Colors.RESET}\n")
-        
-        # Pick initial quantization for nano
-        name, base, family, _ = self.MODELS["nano"]
-        quant = self.pick_quant(name, family)
-        self.quant = quant
-        
-        # Load with spinner
-        print()
-        stop_event = threading.Event()
-        
-        thread = threading.Thread(
-            target=loading_spinner,
-            args=("Initializing Bert Nano...", "nano", stop_event)
-        )
-        thread.daemon = True
-        thread.start()
-        
-        try:
-            success, _ = self.engine.load_model(mode="nano", quant=quant)
-        except Exception as e:
-            if self.debug:
-                print(f"\n{Colors.RED}Error: {e}{Colors.RESET}")
-            success = False
-        
-        stop_event.set()
-        thread.join(timeout=1.0)
-        
-        if success:
-            print()
-            shimmer_text("✓ Bert Nano ready!", "nano", duration=0.8)
-        print()
-    
-    def show_token_required(self):
-        """Show token required message"""
-        print(f"""
-{Colors.DIM}┌──────────────────────────────────────────────────────┐{Colors.RESET}
-{Colors.DIM}│{Colors.RESET} {Colors.YELLOW}🔒 Token Required{Colors.RESET}
-{Colors.DIM}│{Colors.RESET}
-{Colors.DIM}│{Colors.RESET} Get your free token at:
-{Colors.DIM}│{Colors.RESET} {Colors.CYAN}https://mnisperuza.github.io/bert-cli/{Colors.RESET}
-{Colors.DIM}│{Colors.RESET}
-{Colors.DIM}│{Colors.RESET} Then use: {Colors.GREEN}/*token YOUR-TOKEN-HERE{Colors.RESET}
-{Colors.DIM}└──────────────────────────────────────────────────────┘{Colors.RESET}
-""")
+            print(f"{Colors.YELLOW}Usage: -color light | -color dark | -color reset{Colors.RESET}")
+            return True
     
     def handle_command(self, user_input: str):
-        """Handle slash commands. Returns: False to exit, True to continue, None to process as query"""
+        """Handle slash commands and special commands"""
         
         lower = user_input.lower().strip()
         
         # Exit commands
         if lower in ["/*exit", "/*quit", "/*q", "/exit", "/quit"]:
+            self.theme.reset_theme()  # Reset theme on exit
             print(f"\n{Colors.DIM}Goodbye! 👋{Colors.RESET}\n")
             return False
+        
+        # Color theme commands
+        if lower.startswith("-color "):
+            args = user_input[7:].strip()
+            self.handle_color_command(args)
+            return True
+        
+        # Multiline mode toggle
+        if lower in ["/*paste", "/paste", "/*multiline", "/multiline"]:
+            self.multiline_mode = not self.multiline_mode
+            status = "enabled" if self.multiline_mode else "disabled"
+            print(f"{Colors.GREEN}✓{Colors.RESET} Multiline/paste mode {status}")
+            return True
         
         # Help
         if lower in ["/*help", "/help", "/*h"]:
@@ -629,114 +858,123 @@ class BertCLI:
         
         return None
     
-    def query(self, user_input: str, think_mode: bool = False):
-        """Send query to model"""
-        
-        # Check token
-        if not self.token_manager or not self.token_manager.has_valid_token():
-            self.show_token_required()
-            return
-        
-        # Check if model loaded
-        if not self.engine or not self.engine.model:
-            print(f"\n{Colors.YELLOW}No model loaded. Loading default...{Colors.RESET}")
-            if not self.load_model(self.mode, self.quant, show_picker=False):
-                return
-        
-        model_info = self.MODELS.get(self.mode, self.MODELS["nano"])
-        name, base, family, has_thinking = model_info
-        
-        # Check if thinking mode is valid for this model
-        if think_mode and not has_thinking:
-            print(f"\n{Colors.YELLOW}⚠️  Thinking mode only works with Bert Main (Qwen3-1.7B){Colors.RESET}")
-            print(f"{Colors.DIM}   Current model: {name}{Colors.RESET}")
-            print(f"{Colors.DIM}   Switch with: bert main{Colors.RESET}\n")
-            return
-        
-        # Process file references
-        file_content, enhanced_prompt = self.engine.process_file_request(user_input)
-        
-        if file_content:
-            paths = self.engine.file_handler.extract_paths(user_input)
-            for path_str in paths:
-                path = self.engine.file_handler.resolve_path(path_str)
-                if path:
-                    print(f"{Colors.DIM}📂 Found: {path.name}{Colors.RESET}")
-            print()
-        
-        # Reset interrupt handler
-        self.interrupt_handler.reset()
-        
-        # Get model color
+    def pick_quant(self, model_name, family):
+        """Quantization picker with polished UI"""
         r, g, b = FAMILY_COLORS.get(family, FAMILY_COLORS["nano"])
-        model_color = f"\033[38;2;{r};{g};{b}m"
+        color = f"\033[38;2;{r};{g};{b}m"
         
-        # Variables to collect response
-        thinking_content = ""
-        response_content = ""
-        response_tokens = 0
-        in_thinking = False
+        print(f"\n{color}┌{'─' * 48}┐{Colors.RESET}")
+        print(f"{color}│{Colors.RESET} {Colors.BOLD}🎛️  Select Quantization for {model_name}{Colors.RESET}")
+        print(f"{color}└{'─' * 48}┘{Colors.RESET}\n")
         
-        # Print "Bert:" label
-        bert_label = gradient_text("Bert", family)
-        print(f"{bert_label}: ", end='', flush=True)
+        print(f"  {Colors.DIM}[1] INT4{Colors.RESET} — Balanced ⭐ (4GB VRAM)")
+        print(f"  {Colors.DIM}[2] INT8{Colors.RESET} — High quality (6GB+)")
+        print(f"  {Colors.DIM}[3] FP16{Colors.RESET} — Best quality (8GB+)")
+        print(f"  {Colors.DIM}[4] FP32{Colors.RESET} — CPU / Full precision")
+        print(f"\n  {Colors.DIM}Press Enter for INT4{Colors.RESET}")
         
         try:
-            for chunk in self.engine.generate_stream(enhanced_prompt):
-                # Check for ESC interrupt
-                if check_for_esc():
-                    self.engine.stop_generation()
-                    print(f"\n{Colors.DIM}[Stopped]{Colors.RESET}")
-                    break
-                
-                chunk_type = chunk.get("type", "")
-                content = chunk.get("content", "")
-                
-                if chunk_type == "thinking":
-                    # Collect thinking content
-                    thinking_content += content
-                    in_thinking = True
-                
-                elif chunk_type == "token":
-                    # Skip role tags
-                    if content.strip() in ['assistant', 'user', 'system']:
-                        continue
-                    
-                    response_content += content
-                    response_tokens += 1
-                    
-                    # Print response token
-                    print(content, end='', flush=True)
-                    time.sleep(0.008)  # Slight delay for readability
-                
-                elif chunk_type == "status":
-                    print(f"\n{Colors.DIM}{content}{Colors.RESET}", flush=True)
-                
-                elif chunk_type == "done":
-                    print()  # End the response line
-                    
-                    # Show thinking box if we had thinking content and think_mode is on
-                    thinking = chunk.get("thinking", "") or thinking_content
-                    if think_mode and thinking.strip():
-                        print_thinking_box(thinking)
-                    
-                    # Show token usage (only response tokens!)
-                    resp_tokens = chunk.get("response_tokens", response_tokens)
-                    remaining = chunk.get("tokens_remaining", 0)
-                    
-                    print(f"\n{Colors.DIM}─── {resp_tokens} tokens │ {remaining:,} remaining ───{Colors.RESET}")
-                
-                elif chunk_type == "error":
-                    print(f"\n{Colors.RED}Error: {content}{Colors.RESET}")
+            choice = input(f"  {color}Your choice (1-4):{Colors.RESET} ").strip()
+            quant_map = {"1": "int4", "2": "int8", "3": "fp16", "4": "fp32", "": "int4"}
+            selected = quant_map.get(choice, "int4")
+            print(f"\n  {Colors.GREEN}✓ Selected {selected.upper()}{Colors.RESET}")
+            return selected
+        except:
+            return "int4"
+    
+    def load_model(self, mode: str, quant: str = None, show_picker: bool = True):
+        """Load a model with animations"""
+        if not ENGINE_AVAILABLE or not self.engine:
+            print(f"{Colors.RED}✗ Engine not available{Colors.RESET}")
+            return False
         
-        except KeyboardInterrupt:
-            self.engine.stop_generation()
-            print(f"\n{Colors.DIM}[Interrupted]{Colors.RESET}")
+        model_info = self.MODELS.get(mode, self.MODELS["nano"])
+        name, base, family, _ = model_info
+        
+        print()
+        shimmer_text(f"→ {name}", family, duration=1.0)
+        
+        if quant is None and show_picker:
+            quant = self.pick_quant(name, family)
+        elif quant is None:
+            quant = self.quant
+        
+        print()
+        stop_event = threading.Event()
+        
+        thread = threading.Thread(
+            target=loading_spinner,
+            args=(f"Loading {name}...", family, stop_event)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        success, message = self.engine.load_model(mode, quant)
+        
+        stop_event.set()
+        thread.join(timeout=1.0)
+        
+        if success:
+            self.mode = mode
+            self.quant = quant
+            print()
+            shimmer_text(f"✓ {name} ready!", family, duration=0.8)
+            print()
+            return True
+        else:
+            print(f"\n{Colors.RED}✗ {message}{Colors.RESET}\n")
+            return False
+    
+    def init_engine(self):
+        """Initialize engine with default model (nano) after banner"""
+        if not ENGINE_AVAILABLE:
+            print(f"{Colors.DIM}Demo mode (engine not available){Colors.RESET}\n")
+            return
+        
+        if self.engine:
+            print(f"  {Colors.DIM}🖥️  {self.engine.get_device_info()}{Colors.RESET}\n")
+        
+        name, base, family, _ = self.MODELS["nano"]
+        quant = self.pick_quant(name, family)
+        self.quant = quant
+        
+        print()
+        stop_event = threading.Event()
+        
+        thread = threading.Thread(
+            target=loading_spinner,
+            args=("Initializing Bert Nano...", "nano", stop_event)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        try:
+            success, _ = self.engine.load_model(mode="nano", quant=quant)
         except Exception as e:
-            print(f"\n{Colors.RED}Error: {e}{Colors.RESET}")
             if self.debug:
-                import traceback
-                traceback.print_exc()
+                print(f"\n{Colors.RED}Error: {e}{Colors.RESET}")
+            success = False
+        
+        stop_event.set()
+        thread.join(timeout=1.0)
+        
+        if success:
+            print()
+            shimmer_text("✓ Bert Nano ready!", "nano", duration=0.8)
+        print()
+    
+    def show_token_required(self):
+        """Show token required message"""
+        print(f"""
+{Colors.DIM}┌──────────────────────────────────────────────────────┐{Colors.RESET}
+{Colors.DIM}│{Colors.RESET} {Colors.YELLOW}🔒 Token Required{Colors.RESET}
+{Colors.DIM}│{Colors.RESET}
+{Colors.DIM}│{Colors.RESET} Get your free token at:
+{Colors.DIM}│{Colors.RESET} {Colors.CYAN}https://mnisperuza.github.io/bert-cli/{Colors.RESET}
+{Colors.DIM}│{Colors.RESET}
+{Colors.DIM}│{Colors.RESET} Then use: {Colors.GREEN}/*token YOUR-TOKEN-HERE{Colors.RESET}
+{Colors.DIM}└──────────────────────────────────────────────────────┘{Colors.RESET}
+""")
     
     def show_help(self):
         """Show help with gradient model names"""
@@ -766,6 +1004,14 @@ class BertCLI:
     bert int8      {Colors.DIM}High quality{Colors.RESET}
     bert fp16      {Colors.DIM}Best quality{Colors.RESET}
     bert fp32      {Colors.DIM}CPU / Full precision{Colors.RESET}
+
+  {Colors.BOLD}Terminal Themes:{Colors.RESET} {Colors.SAGE}NEW!{Colors.RESET}
+    -color dark    {Colors.DIM}Pitch black background (default){Colors.RESET}
+    -color light   {Colors.DIM}Bone white background{Colors.RESET}
+    -color reset   {Colors.DIM}Reset to terminal default{Colors.RESET}
+
+  {Colors.BOLD}Input Modes:{Colors.RESET}
+    /*paste        {Colors.DIM}Toggle multiline paste mode{Colors.RESET}
 
   {Colors.BOLD}Thinking Mode:{Colors.RESET} {Colors.CYAN}(Only bert main){Colors.RESET}
     /*think - your question here
@@ -806,6 +1052,8 @@ class BertCLI:
         print(f"  Base: {base}")
         print(f"  Quant: {self.quant.upper()}")
         print(f"  Thinking: {'Available 🧠' if has_thinking else 'Not available'}")
+        print(f"  Theme: {self.theme.THEMES[self.theme.current_theme]['name']}")
+        print(f"  Multiline: {'Enabled' if self.multiline_mode else 'Disabled'}")
         
         if self.engine:
             print(f"  Device: {self.engine.get_device_info()}")
@@ -820,17 +1068,110 @@ class BertCLI:
         
         print()
     
-    def run(self):
-        """Main CLI loop"""
+    def query(self, user_input: str, think_mode: bool = False):
+        """Send query to model"""
         
-        # Clear and show banner
+        if not self.token_manager or not self.token_manager.has_valid_token():
+            self.show_token_required()
+            return
+        
+        if not self.engine or not self.engine.model:
+            print(f"\n{Colors.YELLOW}No model loaded. Loading default...{Colors.RESET}")
+            if not self.load_model(self.mode, self.quant, show_picker=False):
+                return
+        
+        model_info = self.MODELS.get(self.mode, self.MODELS["nano"])
+        name, base, family, has_thinking = model_info
+        
+        if think_mode and not has_thinking:
+            print(f"\n{Colors.YELLOW}⚠️  Thinking mode only works with Bert Main (Qwen3-1.7B){Colors.RESET}")
+            print(f"{Colors.DIM}   Current model: {name}{Colors.RESET}")
+            print(f"{Colors.DIM}   Switch with: bert main{Colors.RESET}\n")
+            return
+        
+        file_content, enhanced_prompt = self.engine.process_file_request(user_input)
+        
+        if file_content:
+            paths = self.engine.file_handler.extract_paths(user_input)
+            for path_str in paths:
+                path = self.engine.file_handler.resolve_path(path_str)
+                if path:
+                    print(f"{Colors.DIM}📂 Found: {path.name}{Colors.RESET}")
+            print()
+        
+        self.interrupt_handler.reset()
+        
+        r, g, b = FAMILY_COLORS.get(family, FAMILY_COLORS["nano"])
+        model_color = f"\033[38;2;{r};{g};{b}m"
+        
+        thinking_content = ""
+        response_content = ""
+        response_tokens = 0
+        in_thinking = False
+        
+        bert_label = gradient_text("Bert", family)
+        print(f"{bert_label}: ", end='', flush=True)
+        
+        try:
+            for chunk in self.engine.generate_stream(enhanced_prompt):
+                if check_for_esc():
+                    self.engine.stop_generation()
+                    print(f"\n{Colors.DIM}[Stopped]{Colors.RESET}")
+                    break
+                
+                chunk_type = chunk.get("type", "")
+                content = chunk.get("content", "")
+                
+                if chunk_type == "thinking":
+                    thinking_content += content
+                    in_thinking = True
+                
+                elif chunk_type == "token":
+                    if content.strip() in ['assistant', 'user', 'system']:
+                        continue
+                    
+                    response_content += content
+                    response_tokens += 1
+                    
+                    print(content, end='', flush=True)
+                    time.sleep(0.008)
+                
+                elif chunk_type == "status":
+                    print(f"\n{Colors.DIM}{content}{Colors.RESET}", flush=True)
+                
+                elif chunk_type == "done":
+                    print()
+                    
+                    thinking = chunk.get("thinking", "") or thinking_content
+                    if think_mode and thinking.strip():
+                        print_thinking_box(thinking)
+                    
+                    resp_tokens = chunk.get("response_tokens", response_tokens)
+                    remaining = chunk.get("tokens_remaining", 0)
+                    
+                    print(f"\n{Colors.DIM}─── {resp_tokens} tokens │ {remaining:,} remaining ───{Colors.RESET}")
+                
+                elif chunk_type == "error":
+                    print(f"\n{Colors.RED}Error: {content}{Colors.RESET}")
+        
+        except KeyboardInterrupt:
+            self.engine.stop_generation()
+            print(f"\n{Colors.DIM}[Interrupted]{Colors.RESET}")
+        except Exception as e:
+            print(f"\n{Colors.RED}Error: {e}{Colors.RESET}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+    
+    def run(self):
+        """Main CLI loop with styled input"""
+        
         self.clear()
         self.banner()
         
-        # Load model right after banner!
         self.init_engine()
         
-        # Tips box
+        # Tips box with sage accent
         r_nano = FAMILY_COLORS["nano"]
         r_main = FAMILY_COLORS["main"]
         r_coder = FAMILY_COLORS["coder"]
@@ -838,10 +1179,11 @@ class BertCLI:
         print(f"{Colors.DIM}┌─────────────────────────────────────────────────────────┐{Colors.RESET}")
         print(f"{Colors.DIM}│{Colors.RESET} Models: \033[38;2;{r_nano[0]};{r_nano[1]};{r_nano[2]}mnano\033[0m • mini • \033[38;2;{r_main[0]};{r_main[1]};{r_main[2]}mmain 🧠\033[0m • max • \033[38;2;{r_coder[0]};{r_coder[1]};{r_coder[2]}mcoder\033[0m   {Colors.DIM}│{Colors.RESET}")
         print(f"{Colors.DIM}│{Colors.RESET} Quant:  bert int4 / int8 / fp16 / fp32                  {Colors.DIM}│{Colors.RESET}")
-        print(f"{Colors.DIM}│{Colors.RESET} Think- EARLY BETA:  /*think - question (bert main only) 🧠          {Colors.DIM}│{Colors.RESET}")
-        print(f"{Colors.DIM}│{Colors.RESET} Files- EARLY BETA:  @path/to/file.py in your query                  {Colors.DIM}│{Colors.RESET}")
-        print(f"{Colors.DIM}│{Colors.RESET} Stop:   Press ESC during generation                     {Colors.DIM}│{Colors.RESET}")
-        print(f"{Colors.DIM}│{Colors.RESET} Help:   /*help                                          {Colors.DIM}│{Colors.RESET}")
+        print(f"{Colors.DIM}│{Colors.RESET} Theme:  -color light / -color dark                     {Colors.DIM}│{Colors.RESET}")
+        print(f"{Colors.DIM}│{Colors.RESET} Think:  /*think - question (bert main only) 🧠         {Colors.DIM}│{Colors.RESET}")
+        print(f"{Colors.DIM}│{Colors.RESET} Paste:  /*paste to toggle multiline mode               {Colors.DIM}│{Colors.RESET}")
+        print(f"{Colors.DIM}│{Colors.RESET} Stop:   Press ESC during generation                    {Colors.DIM}│{Colors.RESET}")
+        print(f"{Colors.DIM}│{Colors.RESET} Help:   /*help                                         {Colors.DIM}│{Colors.RESET}")
         print(f"{Colors.DIM}└─────────────────────────────────────────────────────────┘{Colors.RESET}\n")
         
         print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
@@ -849,10 +1191,15 @@ class BertCLI:
         while True:
             try:
                 # Show context bar
-                print(self.context_bar())
+                ctx = self.context_bar()
                 
-                # Get input
-                user_input = get_input_line(self.prompt())
+                # Get input using styled input bar
+                placeholder = self.get_placeholder()
+                user_input = get_styled_input(
+                    placeholder=placeholder,
+                    multiline=self.multiline_mode,
+                    context_bar=ctx
+                )
                 
                 if not user_input:
                     hint = self.get_placeholder()
@@ -862,7 +1209,6 @@ class BertCLI:
                 # Check for /*think command
                 think_mode = False
                 if user_input.lower().startswith("/*think ") or user_input.lower().startswith("/think "):
-                    # Extract the actual question after /*think
                     parts = user_input.split(' ', 1)
                     if len(parts) > 1:
                         user_input = parts[1].strip()
@@ -871,7 +1217,7 @@ class BertCLI:
                         print(f"{Colors.YELLOW}Usage: /*think - your question here{Colors.RESET}")
                         continue
                 
-                # Handle other commands
+                # Handle commands
                 result = self.handle_command(user_input)
                 
                 if result is False:
@@ -886,9 +1232,11 @@ class BertCLI:
                 print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
                 
             except KeyboardInterrupt:
+                self.theme.reset_theme()
                 print(f"\n\n{Colors.DIM}Goodbye! 👋{Colors.RESET}\n")
                 break
             except EOFError:
+                self.theme.reset_theme()
                 print(f"\n\n{Colors.DIM}Goodbye! 👋{Colors.RESET}\n")
                 break
 

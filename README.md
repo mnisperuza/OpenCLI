@@ -1,12 +1,12 @@
-# BERT CLI
+## BERT CLI
 
-**A Friendly, local AI assistant by Amphydia**
+**A Educacional Project by Matias Nisperuza**
+
+#### **Give the repository a star if you find it cool or useful!🌟**
 
 ![BERT CLI](https://img.shields.io/badge/Bert-CLI-598556?style=for-the-badge)
 ![Version](https://img.shields.io/badge/version-1.0.0-96C3A3?style=for-the-badge)
 ![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Windows](https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)
 ![HuggingFace](https://img.shields.io/badge/HuggingFace-%23FFD21E.svg?style=for-the-badge&logo=huggingface&logoColor=white)
 ![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
@@ -14,11 +14,14 @@
 
 ---
 
-## UPDATES
+## Updates: 
+Bert its now at 1.2.0 , Featuring:
+- Fixed paste support
+- Terminal color themes commands: -color light / -color dark (***they do work***)
+- Multiline paste mode: /*paste
 
-**¡BERT CLI is now officially out of Beta phase!**
 
-Visit berts Official GitHub Page here: [Bert CLI official Page](https://amphydia.github.io/bert-cli/)
+Visit berts Official GitHub Page here: [Bert CLI official Page](https://mnisperuza.github.io/bert-cli/)
 
 
 ## ⚖️ Legal & Licensing
@@ -32,7 +35,11 @@ This is **Software Licensed Under Apache 2.0**.
 ### About Bert:
 ![Bert CLI](https://img.shields.io/badge/Bert-598556?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAA4AAAAOCAYAAAAfSC3RAAABCGlDQ1BJQ0MgUHJvZmlsZQAAeJxjYGA8wQAELAYMDLl5JUVB7k4KEZFRCuwPGBiBEAwSk4sLGHADoKpv1yBqL+viUYcLcKakFicD6Q9ArFIEtBxopAiQLZIOYWuA2EkQtg2IXV5SUAJkB4DYRSFBzkB2CpCtkY7ETkJiJxcUgdT3ANk2uTmlyQh3M/Ck5oUGA2kOIJZhKGYIYnBncAL5H6IkfxEDg8VXBgbmCQixpJkMDNtbGRgkbiHEVBYwMPC3MDBsO48QQ4RJQWJRIliIBYiZ0tIYGD4tZ2DgjWRgEL7AwMAVDQsIHG5TALvNnSEfCNMZchhSgSKeDHkMyQx6QJYRgwGDIYMZAKbWPz9HbOBQAAACHUlEQVR42kXSy2pTURjF8f+3zzHmcpLehCalFCvWWooIVsFBoRcRh6IOWtA3cGAfoI+gL+DMF3DQiaCCDhQc2JaqFaSIsbV3m8TE5CTpOftzsKOO9mbDWmuwfzI6VVDPExBBBIwRRARVRRVEQBUAVBXUnUaMC7kANJohjWaIonieAUBcDuncBMEX3EoURyBwaXQMATa2tyhVq3QHWay1iOLmO02+iBDHMelkioVb8xyVKhzVKly7cJmNvS2evnlNJpkishYAXwxWFWOMUAtD7s7e4O3KKotPHvPpR5Fn79+RTaRYuDlHLQzpy+XoSmeIbIwAJopj+nI58kGWF2vLPLr/gInT55i5OEElrFOq/WJuchbf87k3fZ1Wu40Yg7GqJBMJXq0sMzI0xHGzzff9XVa/fOZsYZCvu9ucyec5LJfxPUNPOksUR/ie8ag3Q16urzHU34/vCSODBXrTAeIZKtXfWGsJTqbwBephE5Mw+O5jhO5shuL+Du2oRaVeY32zSNSyDBcGKO7sMjk+zubOHuVGg3yqCxmbGVDjCYKgKGJg8c48QTpJq3VM1I74dnBA2vd5uLREkE1hBGRs2gXpqImtJYoibl+5ynDfKbZLZTYPf/L8w0dyuRQnPINVkPNTBbfYISdGAKXSaKAxGBFiq/QEaccOwCr+X4f/Xq2CQG8m6EBxbq21dAw4CABqAVHESAe0W3H1+r/USUcV/gAs9ewGK9JGLAAAAABJRU5ErkJggg==&logoColor=white)
 
-Bert is designed as a reliable AI assistant, something you can always rely on, you can see Bert as a Friend, as a service, as a companion, or as something else that you could value.
+Bert CLI is a small educational dev tool project I’m building and maintaining. Working on the CLI, website, and server has been a fun way for me to learn, break things, and improve my skills while building something cool.
+
+**Bert CLI has nothing to do with BERT (Bidirectional Encoder Representations from Transformers)**, Bert CLI Is just a Framework that host decoder models such as Qwen 2.5/3 models from Alibaba or LFM2 models from LiquidAI.
+
+If you spot any issues, have ideas, or just want to give feedback, open a issue on GitHub, if you want to collaborate, send me an email — I’m always open to it.
 
 
 
@@ -72,16 +79,11 @@ Then run bert and use:
 ```
 /*token YOUR-TOKEN-HERE
 ```
+### Why Tokens Keys?
 
-## Key Features for Out of Beta 1.0.0
+Token keys may seem unreliable, I know, But I have seen that, to ensure proper chat inside the structure I built with the memory system, a Limit of 20,000 Tokens seems fine, Its Free and Totally open.
 
-- ✅ **ESC Interrupt** — Stop generation mid-stream
-- ✅ **Token-by-token Streaming** — See responses appear naturally
-- ✅ **Thinking Display** — See model's reasoning with `/*think`
-- ✅ **Path-aware File Inspection** — Use `@path/to/file` in queries
-- ✅ **Automatic Context Compression** — Never lose context
-- ✅ **Weekly Token System** — 20K tokens free per week
-- ✅ **Gradient UI** — Beautiful color-coded model names
+I do store your data, but I am not going to do anything with it, I only store it to track and assign a ID to the Tokens, If you have any complain, doubt, Feedback or issue, feel free to email me: mnisperuza1102@gmail.com
 
 >For more info visit:  [Bert CLI official Page](https://amphydia.github.io/bert-cli/)
 
@@ -132,6 +134,9 @@ bert fp32       # Full precision / CPU
 /*status        # Show current status
 /*clear         # Clear screen
 /*exit          # Exit Bert
+-color light    # change to Bone white background
+-color dark     # change to pitch black
+/*paste         # allows multiline paste
 ```
 
 ---
@@ -168,7 +173,7 @@ bert --del
 
 ## Support
 
-- **GitHub Issues**: [github.com/Amphydia/bert-cli/issues](https://github.com/Amphydia/bert-cli/issues)
+- **GitHub Issues**: [github.com/mnisperuza/bert-cli/issues](https://github.com/mnisperuza/bert-cli/issues)
 
 - **Email**: mnisperuza1102@gmail.com
 
@@ -182,9 +187,6 @@ When reporting issues, include:
 ---
 Thanks for Using Bert CLI ❤️
 
-**Reliable as always.**  
-**Amphydia — 2025**
 
----
 
 

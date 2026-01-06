@@ -2,9 +2,9 @@
 Bert Error Logger
 ══════════════════════════════════════════════════════════════════════════════
 Logs errors to ~/.bert/errors.log for debugging and support.
-Users can share this file manually when reporting issues.
+You can share this file manually when reporting issues.
 
-By Amphydia — 2025
+By Matias Nisperuza — 2026
 ══════════════════════════════════════════════════════════════════════════════
 """
 

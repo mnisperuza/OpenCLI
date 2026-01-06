@@ -1,7 +1,7 @@
 """
-Bert Core Engine v1.0.0
+Bert Core Engine v1.2.0
 
-By Amphydia — 2025
+By Matias Nisperuza — 2026
 
 """
 
@@ -1164,7 +1164,7 @@ class BertEngine:
                 self.memory.add(prompt, full_response)
             
             # Count tokens and deduct (only response tokens, not thinking)
-            total_tokens = tokens_generated + (input_length // 4)  # Rough estimate
+            total_tokens = tokens_generated
             success, remaining = self.token_manager.use_tokens(total_tokens)
             
             # Auto-compress if needed

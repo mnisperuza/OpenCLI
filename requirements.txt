@@ -1,10 +1,8 @@
-# Bert CLI v1.0.0 — Dependencies
-# By Amphydia — 2025
-# Cross-platform: Windows, Linux, macOS
+# Bert CLI v1.2.0 — Dependencies
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CORE (Required for all models)
+# CORE
 # ─────────────────────────────────────────────────────────────────────────────
 torch>=2.1.0
 transformers>=4.42.0
@@ -13,6 +11,7 @@ huggingface-hub>=0.20.0
 hf_xet>=1.1.0
 safetensors>=0.4.0
 numpy>=1.24.0,<2.0.0
+textual>=7.0.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TOKENIZERS (Required by specific models)

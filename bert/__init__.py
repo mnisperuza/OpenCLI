@@ -1,10 +1,10 @@
 """
-Bert CLI — A calm, local AI assistant by Amphydia
-Version 1.0.0 (Stable)
+Bert CLI — A calm, local AI assistant
+Version 1.2.0 (Stable)
 """
 
-__version__ = "1.0.0"
-__author__ = "Biwa"
+__version__ = "1.2.0"
+__author__ = "Matias Nisperuza"
 
 from bert.cli import main, BertCLI
 from bert.engine import get_engine, BertEngine, get_token_manager, get_interrupt_handler
