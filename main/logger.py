@@ -1,7 +1,7 @@
 """
-Bert Error Logger
+OpenCLI Error Logger
 ══════════════════════════════════════════════════════════════════════════════
-Logs errors to ~/.bert/errors.log for debugging and support.
+Logs errors to ~/.opencli/errors.log for debugging and support.
 You can share this file manually when reporting issues.
 
 By Matias Nisperuza — 2026
@@ -11,25 +11,26 @@ By Matias Nisperuza — 2026
 import os
 import sys
 import json
+import logging
 import traceback
 import platform
 from pathlib import Path
 from datetime import datetime
 
 
-class BertLogger:
-    """Simple error logger for Bert CLI"""
+class OpenCLILogger:
+    """Simple error logger for OpenCLI."""
     
     def __init__(self):
-        self.bert_dir = Path.home() / ".bert"
-        self.log_file = self.bert_dir / "errors.log"
+        self.opencli_dir = Path.home() / ".opencli"
+        self.log_file = self.opencli_dir / "errors.log"
         self.max_log_size = 1024 * 1024  # 1MB max
         self._ensure_dir()
     
     def _ensure_dir(self):
-        """Create .bert directory if needed"""
+        """Create OpenCLI data directory if needed."""
         try:
-            self.bert_dir.mkdir(parents=True, exist_ok=True)
+            self.opencli_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
     
@@ -160,12 +161,29 @@ class BertLogger:
 # Global logger instance
 _logger = None
 
+_NOISY_LOGGERS = (
+    "torch",
+    "transformers",
+    "accelerate",
+    "bitsandbytes",
+    "torch.distributed",
+    "torch.distributed.elastic",
+)
 
-def get_logger() -> BertLogger:
+
+def configure_logging(level: int = logging.WARNING) -> None:
+    """Set library log levels without TF_CPP / PYTHONWARNINGS env hacks."""
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+    for name in _NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+
+def get_logger() -> OpenCLILogger:
     """Get or create the global logger instance"""
     global _logger
     if _logger is None:
-        _logger = BertLogger()
+        _logger = OpenCLILogger()
     return _logger
 
 

@@ -3,15 +3,15 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bert-cli"
-version = "1.2.0"
-description = "Bert — A Friendly, local AI assistant"
+name = "opencli"
+dynamic = ["version"]
+description = "OpenCLI — local AI assistant"
 readme = "README.md"
 license = {text = "Apache 2.0"}
 authors = [
     {name = "Matias Nisperuza", email = "mnisperuza1102@gmail.com"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
@@ -22,8 +22,6 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -33,16 +31,23 @@ keywords = ["ai", "assistant", "llm", "local", "cli", "qwen"]
 
 # Core dependencies
 dependencies = [
-    "torch>=2.1.0",
-    "transformers>=4.42.0",
-    "accelerate>=0.27.0",
-    "huggingface-hub>=0.20.0",
-    "hf_xet>=1.1.0",
-    "safetensors>=0.4.0",
-    "sentencepiece>=0.1.99",
-    "einops>=0.7.0",
-    "numpy>=1.24.0,<2.0.0",
-    "bitsandbytes>=0.43.0",
+    "ddgs>=9.14,<10",
+    "pydantic-ai-slim>=1.107,<2",
+    "torch>=2.4.0",              # Actualizado para mejor soporte de bfloat16 y kernels de atención en 2026
+    "transformers>=5.2.0",       # REQUISITO CRÍTICO: Necesario para la arquitectura híbrida de Qwen 3.5
+    "accelerate>=0.34.0",        # Actualizado para la distribución automática de capas GQA
+    "huggingface-hub>=0.24.0",   # Actualizado para manejar los nuevos formatos de checkpoints
+    "hf_xet>=1.5.1",             # Sincronizado con lo que instaló tu sistema
+    "safetensors>=0.4.3",
+    "sentencepiece>=0.2.0",
+    "einops>=0.8.0",             # Recomendado para las operaciones de tensores en la atención lineal de Qwen 3.5
+    "numpy>=1.26.0,<3.0.0",      # Ampliado el rango para evitar conflictos con librerías modernas
+    "bitsandbytes>=0.45.0",
+    "hqq>=0.2.8.post1",          # INT8 HQQ backend for Q8 KV-cache quantization
+    "rich>=14.0.0",
+    "prompt_toolkit>=3.0.43",
+    "questionary>=1.10.0",
+    "textual>=7.0.0",
 ]
 
 [project.optional-dependencies]
@@ -51,7 +56,7 @@ perf = ["xformers>=0.0.25"]
 full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25"]
 
 [project.scripts]
-bert = "bert.cli:main"
+opencli = "main.cli:main"
 
 [project.urls]
 Homepage = "https://mnisperuza.github.io/bert-cli/"
@@ -61,4 +66,7 @@ Issues = "https://github.com/mnisperuza/bert-cli"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["bert*"]
+include = ["main*"]
+
+[tool.setuptools.dynamic]
+version = {attr = "main._version.__version__"}

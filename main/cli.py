@@ -1,0 +1,2093 @@
+﻿"""
+OpenCLI terminal interface
+
+By Matias Nisperuza
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+Legacy changes:
+- Fixed paste support
+- Gemini CLI-style clean input prompt
+- Multiline paste mode: /paste
+"""
+
+import os
+import sys
+import time
+import threading
+import _thread
+import re
+import argparse
+import shutil
+import json
+import shlex
+from pathlib import Path
+
+from main._version import __version__
+from main.permissions import (
+    PermissionDecision,
+    PermissionManager,
+    PermissionRequest,
+)
+from main.model_registry import ModelRegistry, ModelRegistryError
+from main.api_profiles import ApiProfileRegistry
+from main.api_providers import ApiProviderError, OpenAICompatibleClient, PROVIDERS
+from main.sandbox import DockerSandbox
+from main.session_memory import SessionMemoryStore
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# MODERN UI IMPORTS (Rich & Prompt Toolkit)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+from rich.console import Console
+from rich.panel import Panel
+from rich import box
+from rich.table import Table
+from rich.text import Text
+from rich.markdown import Markdown
+
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import FormattedText
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.styles import Style
+
+try:
+    import questionary
+    QUESTIONARY_AVAILABLE = True
+except ImportError:
+    QUESTIONARY_AVAILABLE = False
+
+console = Console()
+
+
+class WorkspaceTrust:
+    """Persist explicit trust decisions for workspace folders."""
+
+    def __init__(self, state_file: Path = None):
+        self.state_file = state_file or Path.home() / ".opencli" / "trusted-folders.json"
+
+    @staticmethod
+    def _key(path: Path) -> str:
+        return os.path.normcase(str(path.resolve()))
+
+    def _load(self) -> set:
+        try:
+            data = json.loads(self.state_file.read_text(encoding="utf-8"))
+            return set(data.get("trusted_folders", []))
+        except (OSError, ValueError, TypeError):
+            return set()
+
+    def is_trusted(self, path: Path) -> bool:
+        return self._key(path) in self._load()
+
+    def trust(self, path: Path) -> None:
+        trusted = self._load()
+        trusted.add(self._key(path))
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(
+            json.dumps({"trusted_folders": sorted(trusted)}, indent=2),
+            encoding="utf-8",
+        )
+
+    def confirm(self, path: Path) -> bool:
+        path = path.resolve()
+        if self.is_trusted(path):
+            return True
+
+        console.print(
+            Panel(
+                "OpenCLI may read files referenced from this folder.\n\n"
+                f"[bold]{path}[/bold]",
+                title="[bold]Trust this folder?[/bold]",
+                border_style="#777777",
+                box=box.ROUNDED,
+            )
+        )
+        try:
+            answer = input("Trust and continue? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        if answer not in {"y", "yes"}:
+            return False
+        try:
+            self.trust(path)
+        except OSError as error:
+            console.print(f"[yellow]Could not save trust decision: {error}[/yellow]")
+        return True
+
+
+class StreamingMarkdownRenderer:
+    """Render each completed Markdown unit once, with a small stream throttle."""
+
+    _FENCE_OPEN = re.compile(r"^\s*```[A-Za-z0-9_+.-]*\s*$")
+    _FENCE_CLOSE = re.compile(r"^\s*```\s*$")
+
+    def __init__(self, console: Console, interval: float = 0.025):
+        self.console = console
+        self.interval = interval
+        self.buffer = ""
+        self.last_render = 0.0
+
+    def append(self, text: str) -> None:
+        self.buffer += text
+        self.flush()
+
+    def flush(self, force: bool = False) -> None:
+        if not self.buffer:
+            return
+        now = time.monotonic()
+        if not force and now - self.last_render < self.interval:
+            return
+
+        completed = self._take_completed_units()
+        # Ordinary prose does not need Rich's Markdown parser.  Commit it in
+        # small batches so token streaming stays visible, while fenced and
+        # structured Markdown remains buffered until its block is complete.
+        if self.buffer and self._is_plain_streamable(self.buffer):
+            completed.append((self.buffer, False))
+            self.buffer = ""
+        if force and self.buffer:
+            completed.append((self.buffer, "```" not in self.buffer))
+            self.buffer = ""
+
+        if not completed:
+            self.last_render = now
+            return
+
+        for content, is_safe_markdown in completed:
+            if not is_safe_markdown:
+                self.console.print(Text(self._normalize_plain_stream(content), style="#9b9b9b"), end="")
+                continue
+            content = self._normalize_soft_breaks(content)
+            renderable = (
+                Markdown(
+                    content,
+                    style="#9b9b9b",
+                    code_theme="ansi_dark",
+                    inline_code_theme="ansi_dark",
+                )
+                if is_safe_markdown and content.count("`") % 2 == 0
+                else Text(content, style="#9b9b9b")
+            )
+            self.console.print(renderable, end="")
+        self.last_render = now
+
+    @staticmethod
+    def _is_plain_streamable(content: str) -> bool:
+        """True when content cannot still become a Markdown block."""
+        stripped = content.lstrip()
+        if "`" in content:
+            return False
+        return not (
+            stripped.startswith(("#", "-", "*", "+", ">", "|"))
+            or bool(re.match(r"^\s*\d+[.)](?:\s|$)", content))
+        )
+
+    @staticmethod
+    def _normalize_plain_stream(content: str) -> str:
+        """Keep paragraphs, but turn model soft-wraps into normal spaces."""
+        return re.sub(r"(?<!\n)\r?\n(?!\r?\n)", " ", content)
+
+    @staticmethod
+    def _normalize_soft_breaks(content: str) -> str:
+        """Treat model-inserted single newlines as spaces in ordinary prose."""
+        lines = content.splitlines()
+        is_structured = any(
+            line.lstrip().startswith(("#", "- ", "* ", "+ ", "> ", "```"))
+            or re.match(r"^\s*\d+[.)]\s+", line)
+            or "|" in line
+            for line in lines
+        )
+        if is_structured:
+            return content
+
+        text = " ".join(line.strip() for line in lines if line.strip())
+        return text + ("\n" if content.endswith(("\n", "\r")) else "")
+
+    def _take_completed_units(self):
+        """Commit safe lines once; hold valid fences, pass malformed Markdown through raw."""
+        in_fence = False
+        offset = 0
+        block_start = 0
+        fence_start = 0
+        units = []
+        for line in self.buffer.splitlines(keepends=True):
+            line_start = offset
+            offset += len(line)
+            if not line.endswith(("\n", "\r")):
+                break
+
+            if in_fence:
+                if self._FENCE_CLOSE.match(line):
+                    units.append((self.buffer[fence_start:offset], True))
+                    in_fence = False
+                    block_start = offset
+                continue
+
+            if not line.strip():
+                if block_start < offset:
+                    units.append((self.buffer[block_start:offset], True))
+                block_start = offset
+                continue
+
+            if "```" not in line:
+                continue
+
+            if block_start < line_start:
+                units.append((self.buffer[block_start:line_start], True))
+            if self._FENCE_OPEN.match(line):
+                in_fence = True
+                fence_start = line_start
+            else:
+                units.append((line, False))
+                block_start = offset
+
+        self.buffer = self.buffer[fence_start if in_fence else block_start:]
+        return units
+
+# Platform detection
+IS_WINDOWS = sys.platform == 'win32'
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# KEYBOARD INPUT HANDLING (Cross-platform fallback)
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+if IS_WINDOWS:
+    try:
+        import msvcrt
+        HAS_MSVCRT = True
+    except ImportError:
+        HAS_MSVCRT = False
+else:
+    HAS_MSVCRT = False
+
+
+def check_for_esc() -> bool:
+    """Check for Escape without consuming normal input."""
+    if IS_WINDOWS and HAS_MSVCRT:
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # ESC
+                return True
+    return False
+
+
+class EscapeInterruptWatcher:
+    """Turn Escape into the same shared cancellation request as Ctrl+C."""
+
+    def __init__(self, callback, poll_seconds: float = 0.03):
+        self.callback = callback
+        self.poll_seconds = poll_seconds
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=0.2)
+
+    def _watch(self) -> None:
+        while not self._stop_event.wait(self.poll_seconds):
+            if check_for_esc():
+                self.callback()
+                return
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# LAZY ENGINE IMPORT
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+ENGINE_AVAILABLE = False
+_engine_module = None
+_engine_import_attempted = False
+
+def _import_engine():
+    """Import the installed package engine on first model use."""
+    global ENGINE_AVAILABLE, _engine_module, _engine_import_attempted
+    _engine_import_attempted = True
+    try:
+        import main.engine as eng
+        _engine_module = eng
+        ENGINE_AVAILABLE = True
+        return True
+    except ImportError:
+        return False
+
+
+def get_engine():
+    """Get engine instance."""
+    if _engine_module and hasattr(_engine_module, 'get_engine'):
+        return _engine_module.get_engine()
+    return None
+
+def get_interrupt_handler():
+    """Get interrupt handler instance."""
+    if _engine_module and hasattr(_engine_module, 'get_interrupt_handler'):
+        return _engine_module.get_interrupt_handler()
+    return None
+
+def ensure_engine_imported() -> bool:
+    """Import ML runtime only when a model operation needs it."""
+    if ENGINE_AVAILABLE:
+        return True
+    if _engine_import_attempted:
+        return False
+    return _import_engine()
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# COLORS & TERMINAL THEMES
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+class Colors:
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
+    ITALIC = "\033[3m"
+    CLEAR_LINE = "\033[2K\r"
+    HIDE_CURSOR = "\033[?25l"
+    SHOW_CURSOR = "\033[?25h"
+
+    BLACK = "\033[90m"
+    RED = "\033[38;2;215;215;215m"
+    GREEN = "\033[38;2;215;215;215m"
+    YELLOW = "\033[38;2;215;215;215m"
+    BLUE = "\033[38;2;215;215;215m"
+    MAGENTA = "\033[38;2;215;215;215m"
+    CYAN = "\033[38;2;215;215;215m"
+    WHITE = "\033[97m"
+
+    # Dark Sage palette
+    SAGE = "\033[38;2;190;190;190m"
+    SAGE_LIGHT = "\033[38;2;215;215;215m"
+    SAGE_DARK = "\033[38;2;120;120;120m"
+    SAGE_DIM = "\033[38;2;150;150;150m"
+    ASSISTANT = "\033[38;2;155;155;155m"
+    PALE_GREEN = "\033[38;2;174;205;181m"
+
+    @staticmethod
+    def rgb(r, g, b):
+        return f"\033[38;2;{max(0,min(255,int(r)))};{max(0,min(255,int(g)))};{max(0,min(255,int(b)))}m"
+
+    @staticmethod
+    def bg_rgb(r, g, b):
+        return f"\033[48;2;{max(0,min(255,int(r)))};{max(0,min(255,int(g)))};{max(0,min(255,int(b)))}m"
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# TERMINAL THEME MANAGER
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# GRADIENTS (per model family) - Updated: removed bert/engineer, renamed miniâ†’auto
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+GRADIENTS = {
+    # Auto: Teal-Mint (fresh, balanced) â€“ same as previous "mini"
+    "auto": [
+        (170, 170, 170),
+
+
+    ],
+    # Qwen: Aqua
+    "qwen": [
+        (170, 170, 170),
+
+    ],
+}
+
+# Primary colors for each family
+FAMILY_COLORS = {"auto": (215, 215, 215), "qwen": (215, 215, 215)}
+
+# Input palette
+def get_input_bar_colors() -> dict:
+    """Single neutral palette. OpenCLI never changes terminal colors."""
+    return {
+        "border": (105, 105, 105),
+        "text": (215, 215, 215),
+        "placeholder": (125, 125, 125),
+        "cursor": (215, 215, 215),
+    }
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ANIMATION FUNCTIONS
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+BRAILLE = ["â ‹", "â ™", "â ¹", "â ¸", "â ¼", "â ´", "â ¦", "â §", "â ‡", "â "]
+
+
+def loading_spinner(message, family, stop_event, speed=0.08):
+    """Braille spinner with gradient color"""
+    gradient = GRADIENTS.get(family, GRADIENTS["auto"])
+    idx = 0
+
+    print(Colors.HIDE_CURSOR, end='', flush=True)
+    try:
+        while not stop_event.is_set():
+            frame = BRAILLE[idx % len(BRAILLE)]
+            r, g, b = gradient[idx % len(gradient)]
+
+            output = f"\033[38;2;{r};{g};{b}m{frame} {message}\033[0m"
+            sys.stdout.write(Colors.CLEAR_LINE + output)
+            sys.stdout.flush()
+
+            idx += 1
+            time.sleep(speed)
+
+        sys.stdout.write(Colors.CLEAR_LINE)
+        sys.stdout.flush()
+    finally:
+        print(Colors.SHOW_CURSOR, end='', flush=True)
+
+
+def gradient_text(text, family):
+    """Return a muted accent label."""
+    return f"{Colors.YELLOW}{text}{Colors.RESET}"
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# STYLED INPUT
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+def get_styled_input(session: PromptSession, placeholder: str = "Type your message...",
+                     multiline: bool = False,
+                     context_bar: str = "") -> str:
+
+    # Get input colors
+    colors = get_input_bar_colors()
+
+    border = colors["border"]
+    text_color = colors["text"]
+
+    bc = f"\033[38;2;{border[0]};{border[1]};{border[2]}m"
+    tc = f"\033[38;2;{text_color[0]};{text_color[1]};{text_color[2]}m"
+
+    sage = FAMILY_COLORS["auto"]
+    prompt_color = f"\033[38;2;{sage[0]};{sage[1]};{sage[2]}m"
+
+    # Show context bar if provided
+    if context_bar:
+        print()
+        print(context_bar)
+
+    if multiline:
+        # === MULTILINE MODE ===
+        # For pasting large texts - press Enter twice to submit
+
+        print(f"\n{bc}â”€â”€â”€ Paste Mode (press Enter twice to submit) â”€â”€â”€{Colors.RESET}")
+        sys.stdout.write(f"{prompt_color}>{Colors.RESET} {tc}")
+        sys.stdout.flush()
+
+        lines = []
+        empty_count = 0
+        first_line = True
+
+        try:
+            while True:
+                if first_line:
+                    line = input()
+                    first_line = False
+                else:
+                    # Continuation prompt
+                    sys.stdout.write(f"{prompt_color}â”‚{Colors.RESET} {tc}")
+                    sys.stdout.flush()
+                    line = input()
+
+                if line == "":
+                    empty_count += 1
+                    if empty_count >= 2:
+                        break
+                else:
+                    empty_count = 0
+                    lines.append(line)
+        except (EOFError, KeyboardInterrupt):
+            pass
+
+        sys.stdout.write(Colors.RESET)
+        print(f"{bc}â”€â”€â”€ End â”€â”€â”€{Colors.RESET}\n")
+
+        return "\n".join(lines)
+
+    else:
+        # === SINGLE LINE MODE - PASTE FRIENDLY ===
+        # No box around input = paste works perfectly
+
+        try:
+            return session.prompt(
+                [("class:prompt", "You > ")],
+                default="",
+                placeholder=FormattedText(
+                    [("class:placeholder", placeholder)]
+                ),
+            )
+        except (EOFError, KeyboardInterrupt):
+            return ""
+
+
+def erase_submitted_single_line(user_input: str) -> None:
+    """Remove PromptToolkit's submitted line before rendering the user panel."""
+    columns = max(shutil.get_terminal_size(fallback=(80, 24)).columns, 1)
+    # PromptToolkit has already moved to the next terminal line after Enter.
+    # Account for terminal wrapping so the complete submitted prompt disappears.
+    line_count = max(1, (len("You > ") + len(user_input) + columns - 1) // columns)
+    for _ in range(line_count):
+        sys.stdout.write("\033[1A\r\033[2K")
+    sys.stdout.write("\r")
+    sys.stdout.flush()
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# THINKING BOX
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# OPENCLI
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+class OpenCLI:
+    VERSION = __version__
+    VERSION_NAME = "Stable"
+    # Removed "bert" and "engineer"; renamed "mini" to "auto"
+    PRIMARY_MODEL_ORDER = ("auto",)
+
+    # Model info: (display_name, base_model, family, has_thinking)
+    MODELS = {
+        "auto": ("Ministral 3 14B Instruct", "mistralai/Ministral-3-14B-Instruct-2512-GGUF", "auto", True),
+    }
+
+    BUILTIN_MODELS = {
+        "ministral-3-14b": {
+            "display_name": "Ministral 3 14B Instruct",
+            "path": "mistralai/Ministral-3-14B-Instruct-2512-GGUF",
+            "family": "auto",
+            "vram": "~9GB",
+            "note": "Fast Instruct-tuned",
+            "usage": "Fast, for casual queries",
+        },
+        "gpt-oss-20b": {
+            "display_name":"GPT-OSS 20B",
+            "path": "unsloth/gpt-oss-20b-GGUF",
+            "family": "auto",
+            "vram": "~12GB",
+            "note": "Strong reliable MoE",
+            "usage": "Balanced, for everyday work",
+
+        },
+        "devstral-small-2-24b": {
+            "display_name": "Devstral Small 2 24B",
+            "path": "bartowski/mistralai_Devstral-Small-2-24B-Instruct-2512-GGUF",
+            "family": "auto",
+            "vram": "~14GB",
+            "note": "Agentic-tuned model",
+            "usage": "Strong, for complex queries",
+        },
+        "qwen3.8-27b": {
+            "display_name": "Qwen 3.8 27B",
+            "path": "unsloth/Qwen3.8-27B-GGUF",
+            "family": "auto",
+            "vram": "~18GB",
+            "note": "Flagship agent",
+            "usage": "Heavy, for that queries that seems invincible",
+        },
+    }
+
+    PLACEHOLDERS = [
+        "Try: explain this error",
+        "Try: review this code",
+        "Try: write a Python function",
+        "Try: help with Git",
+        "Try: explain async/await",
+    ]
+
+    def __init__(self, dry_run: bool = False, initial_model: str = None):
+        self.engine = None
+        self.agent_runtime = None
+        self.mode = "auto"  # Changed from "mini"
+        self.quant = "int4"
+        self.debug = False
+        self.thinking_mode = False
+        self.dry_run = dry_run
+        # Models may request every enabled tool. Proactive routing stays opt-in.
+        self.tools_enabled = True
+        self.auto_tool_routing = False
+        self._placeholder_index = 0
+        self.multiline_mode = False  # For large text paste
+        self.model_selection_mode = "auto"
+        self.auto_model_key = initial_model or "auto"
+        self.server_stopped_by_user = False
+        self.manual_model_key = None
+        self.hidden_model_key = self.auto_model_key
+        self.visible_model_name = "OpenCLI"
+        self.permission_manager = PermissionManager(
+            Path.cwd(), approval_callback=self.request_tool_permission
+        )
+        self.model_registry = ModelRegistry()
+        self.api_profiles = ApiProfileRegistry()
+        self.api_provider = None
+        self.api_model = None
+        self._api_key = None
+        self.sandbox_enabled = False
+        self.sandbox = DockerSandbox(Path.cwd())
+        self.session_memory = SessionMemoryStore(Path.cwd())
+        self.chat_session = None
+        self._active_spinner_event = None
+        self._active_spinner_thread = None
+
+        # Modern UI State
+        self.console = console
+        self.session = None
+
+        self.interrupt_handler = None
+
+    def ensure_engine(self) -> bool:
+        """Create runtime on first model action, not while CLI opens."""
+        if self.engine:
+            return True
+        if not ensure_engine_imported():
+            print(f"{Colors.YELLOW}Engine unavailable. Install ML dependencies first.{Colors.RESET}")
+            return False
+        self.engine = get_engine()
+        self.engine.register_models(self.model_registry.engine_models())
+        self.interrupt_handler = get_interrupt_handler()
+        self.engine.file_handler.permission_callback = (
+            self.permission_manager.request
+        )
+        return self.engine is not None
+
+    def ensure_agent_runtime(self) -> bool:
+        """Create local Pydantic AI runtime without exposing it to UI code."""
+        if self.agent_runtime is not None:
+            return True
+        if not self.ensure_engine():
+            return False
+        try:
+            from main.agent_runtime import RuntimeConfig, get_agent_runtime
+
+            if self.chat_session is None:
+                self.chat_session = self.session_memory.create()
+
+            self.agent_runtime = get_agent_runtime(
+                self.engine,
+                workspace=Path.cwd(),
+                config=RuntimeConfig(
+                    session_id=self.chat_session.session_id,
+                    dry_run=self.dry_run,
+                    tools_enabled=self.tools_enabled,
+                    auto_tool_routing=self.auto_tool_routing,
+                ),
+                permission_callback=self.permission_manager.request,
+                sandbox=self.sandbox if self.sandbox_enabled else None,
+            )
+            return True
+        except ImportError as error:
+            print(
+                f"{Colors.YELLOW}Pydantic AI unavailable: {error}. "
+                f"Install project dependencies.{Colors.RESET}"
+            )
+            return False
+
+    def _save_chat_session(self) -> None:
+        if (
+            getattr(self, "chat_session", None) is None
+            or getattr(self, "agent_runtime", None) is None
+        ):
+            return
+        transcript = self.agent_runtime.export_transcript()
+        self.session_memory.save(self.chat_session, transcript)
+
+    def _new_chat_session(self) -> None:
+        self._save_chat_session()
+        self.agent_runtime = None
+        self.chat_session = self.session_memory.create()
+        print(f"New chat: {self.chat_session.path.name}")
+
+    def _select_memory_archive(self):
+        archives = [
+            path for path in self.session_memory.list()
+            if self.chat_session is None or path != self.chat_session.path
+        ]
+        if not archives:
+            print("No previous session memories.")
+            return None
+        if QUESTIONARY_AVAILABLE:
+            return questionary.select(
+                "Load session memory:",
+                choices=[
+                    questionary.Choice(path.stem, value=path)
+                    for path in archives
+                ],
+            ).ask()
+        for index, path in enumerate(archives, 1):
+            print(f"  {index}. {path.stem}")
+        try:
+            return archives[int(input("Session number: ").strip()) - 1]
+        except (EOFError, KeyboardInterrupt, ValueError, IndexError):
+            return None
+
+    def _load_memory_archive(self) -> None:
+        path = self._select_memory_archive()
+        if path is None:
+            return
+        if not self.ensure_agent_runtime():
+            return
+        try:
+            content = self.session_memory.load(path)
+            self.agent_runtime.load_memory(content, path.name)
+            self._save_chat_session()
+        except (OSError, ValueError) as error:
+            print(f"Memory not loaded: {error}")
+            return
+        print(f"Loaded memory: {path.name}")
+
+    def _remember(self, note: str) -> None:
+        if self.chat_session is None:
+            self.chat_session = self.session_memory.create()
+        transcript = (
+            self.agent_runtime.export_transcript()
+            if self.agent_runtime is not None
+            else self.chat_session.transcript
+        )
+        try:
+            self.session_memory.remember(self.chat_session, note, transcript)
+        except ValueError as error:
+            print(f"Memory note not saved: {error}")
+            return
+        print("Memory note saved for this session.")
+
+    def _stop_active_spinner(self) -> None:
+        if self._active_spinner_event is not None:
+            self._active_spinner_event.set()
+        if self._active_spinner_thread is not None:
+            self._active_spinner_thread.join(timeout=0.5)
+
+    def _request_generation_stop(self) -> None:
+        """Use one cancellation path for Escape and Ctrl+C."""
+        if self.engine is not None:
+            self.engine.stop_generation()
+        elif self.interrupt_handler is not None:
+            self.interrupt_handler.interrupt()
+
+    def _interrupt_from_escape(self) -> None:
+        """Set engine cancellation, then wake the main thread like Ctrl+C."""
+        self._request_generation_stop()
+        _thread.interrupt_main()
+
+    def request_tool_permission(
+        self, request: PermissionRequest
+    ) -> PermissionDecision:
+        """Ask before a tool crosses a local permission boundary."""
+        self._stop_active_spinner()
+        print()
+        print(f"{Colors.BOLD}Permission requested{Colors.RESET}")
+        print(f"  Action: {request.action}")
+        print(f"  Target: {request.target}")
+        print(f"  Reason: {request.reason}")
+        print("  [a] allow once  [s] session  [w] always  [n] deny")
+        try:
+            choice = input("Do you allow this action? [a/s/w/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return PermissionDecision.DENY
+        return {
+            "a": PermissionDecision.ALLOW_ONCE,
+            "allow": PermissionDecision.ALLOW_ONCE,
+            "s": PermissionDecision.ALLOW_SESSION,
+            "session": PermissionDecision.ALLOW_SESSION,
+            "w": PermissionDecision.ALWAYS_ALLOW,
+            "always": PermissionDecision.ALWAYS_ALLOW,
+        }.get(choice, PermissionDecision.DENY)
+
+    def get_session(self) -> PromptSession:
+        """Create terminal input UI only when interactive input begins."""
+        if self.session is None:
+            history_path = Path.home() / ".opencli" / "history"
+            history_path.parent.mkdir(parents=True, exist_ok=True)
+            self.session = PromptSession(
+                history=FileHistory(str(history_path)),
+                style=Style.from_dict({"prompt": "#8f8f8f", "placeholder": "italic #707070"}),
+                erase_when_done=True,
+            )
+        return self.session
+
+    def clear(self):
+        os.system('cls' if IS_WINDOWS else 'clear')
+
+    def banner(self):
+        """Render the clean startup/home panel without starting inference."""
+        loaded = bool(self.engine and getattr(self.engine, "model", None))
+        if self.mode == "api" and self.api_provider and self.api_model:
+            body = (
+                f"[bold]Active:[/bold] {PROVIDERS[self.api_provider].name} Â· "
+                f"{self.api_model}\n"
+                "[dim]/api-md[/dim] change model Â· [dim]/model[/dim] return local"
+            )
+        elif loaded:
+            body = (
+                f"[bold]Active:[/bold] {self.context_bar()}\n"
+                "[dim]/model[/dim] switch Â· [dim]/api[/dim] connect a hosted model"
+            )
+        else:
+            body = (
+                "[bold]No model loaded[/bold]\n"
+                "[dim]/model[/dim] choose local Â· [dim]/api[/dim] connect hosted Â· "
+                "send a message to start Auto"
+            )
+        self.console.print(
+            Panel(
+                body,
+                title=f"[bold]OpenCLI[/bold] [dim]v{self.VERSION}[/dim]",
+                subtitle="Local-first AI workspace",
+                border_style="#777777",
+                box=box.ROUNDED,
+                padding=(1, 2),
+            )
+        )
+        print()
+
+    def get_placeholder(self) -> str:
+        placeholder = self.PLACEHOLDERS[self._placeholder_index % len(self.PLACEHOLDERS)]
+        self._placeholder_index += 1
+        return placeholder
+
+    def context_bar(self) -> str:
+        """Generate context bar with gradient model name"""
+        if self.mode == "api" and self.api_provider and self.api_model:
+            name = f"{PROVIDERS[self.api_provider].name} Â· {self.api_model}"
+        elif not self.engine or not getattr(self.engine, "model", None):
+            name = "No model loaded"
+        elif self.mode in self.MODELS:
+            name, base, family, _ = self.MODELS[self.mode]
+        elif self.mode in self.router_models():
+            data = self.router_models()[self.mode]
+            name = data["display_name"]
+            base = data["path"]
+            family = data["family"]
+        else:
+            name, base, family, _ = self.MODELS["auto"]
+
+        return f"{Colors.PALE_GREEN}[{name}]{Colors.RESET}"
+
+    def router_models(self) -> dict:
+        """Return built-in and persistent user-added model menu entries."""
+        return {**self.BUILTIN_MODELS, **self.model_registry.models}
+
+    def custom_models(self) -> dict:
+        return self.model_registry.models
+
+    def render_user_message(self, user_input: str) -> None:
+        """Echo submitted input in a stable visual container."""
+        message = Text(user_input, style="#d7d7d7")
+        self.console.print(
+            Panel(
+                message,
+                title="[bold #8f8f8f]You[/bold #8f8f8f]",
+                title_align="left",
+                border_style="#777777",
+                box=box.ROUNDED,
+                padding=(0, 1),
+            )
+        )
+
+    def _normalize_model_key(self, mode: str) -> str:
+        """Resolve aliases to canonical model keys."""
+        return (mode or "").strip().lower()
+
+    def get_router_model(self, key: str) -> dict:
+        return self.router_models().get(key, {})
+
+    def get_active_router_model(self) -> dict:
+        return self.get_router_model(self.manual_model_key or self.hidden_model_key)
+
+    def get_active_model_key(self) -> str:
+        return self.manual_model_key or self.hidden_model_key
+
+    def render_model_router_panel(self):
+        table = Table(box=box.SIMPLE_HEAD, expand=True)
+        table.add_column("Modelo", style="bold white")
+        table.add_column("VRAM", style="dim")
+        table.add_column("Uso", style="dim")
+        table.add_column("Estado", justify="center")
+
+        active_key = self.get_active_model_key()
+        for key, data in self.router_models().items():
+            title = data["display_name"]
+            vram = data["vram"]
+            note = data["usage"]
+            if key == active_key:
+                style = "bold white"
+                state = "ACTIVO"
+            else:
+                style = "dim"
+                state = "Disponible"
+            table.add_row(title, vram, note, f"[{style}]{state}[/{style}]", style=style)
+
+        panel_title = f"[bold white]Agent Model Router[/bold white]"
+        subtitle = f"[dim]Use /model manual to choose or /model auto to return to auto[/dim]"
+        self.console.print(Panel(table, title=panel_title, subtitle=subtitle, border_style="#777777", box=box.ROUNDED, padding=(1, 1)))
+
+    def open_model_menu(self, manual: bool = False):
+        self.console.print()
+        self.render_model_router_panel()
+
+        if self.model_selection_mode == "auto" and not manual:
+            if QUESTIONARY_AVAILABLE:
+                choice = questionary.select(
+                    "Â¿QuÃ© deseas hacer?",
+                    choices=[
+                        questionary.Choice("Seguir en modo Auto", value="auto"),
+                        questionary.Choice("Cambiar a modo Manual", value="manual"),
+                    ],
+                    use_arrow_keys=True,
+                    qmark="â€¢",
+                ).ask()
+            else:
+                choice = input("Â¿QuÃ© deseas hacer? [auto/manual]: ").strip().lower()
+
+            if choice == "manual":
+                self.select_model_interactive()
+            else:
+                print("Maintaining auto mode")
+            return
+
+        self.select_model_interactive()
+
+    def select_model_interactive(self):
+        if QUESTIONARY_AVAILABLE:
+            choices = []
+            active_key = self.get_active_model_key()
+            for key, data in self.router_models().items():
+                title = f"{data['display_name']} â€” {data['vram']} â€” {data['usage']}"
+                if key == active_key:
+                    title = f"{title}"
+                choices.append(questionary.Choice(title=title, value=key))
+
+            selection = questionary.select(
+                "Select an agent model:",
+                choices=choices,
+                use_arrow_keys=True,
+                qmark="â€¢",
+            ).ask()
+        else:
+            print("questionary no estÃ¡ disponible; ingresa la clave del modelo:")
+            for key, data in self.router_models().items():
+                print(f"  {key}: {data['display_name']} ({data['vram']})")
+            selection = input("Modelo: ").strip().lower()
+
+        if not selection or selection not in self.router_models():
+            print(f"{Colors.YELLOW}SelecciÃ³n invÃ¡lida o cancelada.{Colors.RESET}")
+            return
+
+        self.manual_model_key = selection
+        self.model_selection_mode = "manual"
+        self.hidden_model_key = self.auto_model_key
+        model = self.get_router_model(selection)
+        print(f"{Colors.GREEN}Manual mode: {model['display_name']}{Colors.RESET}")
+        self.load_model(selection, self.quant, show_picker=False)
+
+    def _model_prompt(self, label: str, default: str = "") -> str:
+        if QUESTIONARY_AVAILABLE:
+            value = questionary.text(label, default=default).ask()
+        else:
+            suffix = f" [{default}]" if default else ""
+            value = input(f"{label}{suffix}: ")
+        return (value or default).strip()
+
+    def _model_confirm(self, label: str, default: bool = False) -> bool:
+        if QUESTIONARY_AVAILABLE:
+            return bool(questionary.confirm(label, default=default).ask())
+        prompt = "Y/n" if default else "y/N"
+        try:
+            answer = input(f"{label} [{prompt}]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return False
+        return answer in {"y", "yes"} or (default and not answer)
+
+    def _render_model_config(self, values: dict) -> None:
+        table = Table(box=box.SIMPLE_HEAD)
+        table.add_column("Setting", style="bold white")
+        table.add_column("Value", style="dim")
+        for label, value in values.items():
+            table.add_row(label, str(value))
+        self.console.print(Panel(table, title="New model configuration", border_style="#777777"))
+
+    def add_model_interactive(self) -> None:
+        """Collect and persist a user model profile, then load only that model."""
+        if len(self.custom_models()) >= ModelRegistry.MAX_CUSTOM_MODELS:
+            print(f"{Colors.YELLOW}Custom model limit reached (10). Use /modelrm first.{Colors.RESET}")
+            return
+        if QUESTIONARY_AVAILABLE:
+            source_type = questionary.select(
+                "Model source:",
+                choices=[
+                    questionary.Choice("Hugging Face GGUF repository", value="huggingface"),
+                    questionary.Choice("Local .gguf file", value="local"),
+                ],
+            ).ask()
+        else:
+            source_type = self._model_prompt("Source (huggingface/local)", "huggingface").casefold()
+        if not source_type:
+            print("Model add cancelled.")
+            return
+
+        name = self._model_prompt("Display name")
+        location_label = "Repository (owner/repo[:quant])" if source_type == "huggingface" else "Local .gguf file path"
+        path = self._model_prompt(location_label)
+        llama_file = ""
+        if source_type == "huggingface":
+            llama_file = self._model_prompt("Exact GGUF filename (optional)")
+        context = self._model_prompt("Context window", "32768")
+        max_tokens = self._model_prompt("Max output tokens", "8192")
+        temperature = self._model_prompt("Temperature", "0.7")
+        has_thinking = self._model_confirm("Model supports thinking mode?", False)
+        supports_vision = self._model_confirm("Model supports vision input?", False)
+        values = {
+            "Name": name,
+            "Source": source_type,
+            "Location": path,
+            "GGUF file": llama_file or "auto-select from quant",
+            "Context": context,
+            "Max output": max_tokens,
+            "Temperature": temperature,
+            "Thinking": has_thinking,
+            "Vision": supports_vision,
+        }
+        self._render_model_config(values)
+        if not self._model_confirm("Add this model and load it now?", True):
+            print("Model add cancelled.")
+            return
+        try:
+            key = self.model_registry.add(
+                name=name,
+                source_type=source_type,
+                path=path,
+                llama_file=llama_file,
+                context=context,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                has_thinking=has_thinking,
+                supports_vision=supports_vision,
+                reserved_keys=set(self.MODELS) | set(self.BUILTIN_MODELS),
+            )
+        except ModelRegistryError as error:
+            print(f"{Colors.YELLOW}Model not added: {error}{Colors.RESET}")
+            return
+        if self.engine is not None:
+            self.engine.register_models(self.model_registry.engine_models())
+        self.model_selection_mode = "manual"
+        self.manual_model_key = key
+        self.hidden_model_key = self.auto_model_key
+        self._save_chat_session()
+        self.agent_runtime = None
+        print(f"{Colors.GREEN}Model saved. Loading {name}â€¦{Colors.RESET}")
+        self.load_model(key, self.quant, show_picker=False)
+
+    def remove_model_interactive(self) -> None:
+        """Remove a user profile only; never delete its GGUF file or repository."""
+        models = self.custom_models()
+        if not models:
+            print(f"{Colors.DIM}No user-added models to remove.{Colors.RESET}")
+            return
+        table = Table(box=box.SIMPLE_HEAD)
+        table.add_column("#", style="dim")
+        table.add_column("Name", style="bold white")
+        table.add_column("Source")
+        table.add_column("Location", overflow="fold")
+        entries = list(models.items())
+        for index, (_, model) in enumerate(entries, 1):
+            table.add_row(str(index), model["display_name"], model["source_type"], model["path"])
+        self.console.print(Panel(table, title="Remove user-added model", border_style="#777777"))
+        if QUESTIONARY_AVAILABLE:
+            key = questionary.select(
+                "Select a model profile to remove:",
+                choices=[questionary.Choice(model["display_name"], value=key) for key, model in entries],
+            ).ask()
+        else:
+            answer = self._model_prompt("Number to remove")
+            try:
+                key = entries[int(answer) - 1][0]
+            except (IndexError, ValueError):
+                key = None
+        if not key:
+            print("Model removal cancelled.")
+            return
+        model = models[key]
+        if not self._model_confirm(f"Remove profile '{model['display_name']}'? The model file will remain untouched.", False):
+            print("Model removal cancelled.")
+            return
+        if self.mode == key:
+            self.stop_server(mark_stopped=False)
+            self.mode = "auto"
+            self.manual_model_key = None
+            self.hidden_model_key = self.auto_model_key
+            self.model_selection_mode = "auto"
+        self.model_registry.remove(key)
+        if self.engine is not None:
+            self.engine.MODELS.pop(key, None)
+        self._save_chat_session()
+        self.agent_runtime = None
+        print(f"{Colors.GREEN}Removed model profile '{model['display_name']}'.{Colors.RESET}")
+
+    def set_model_auto(self):
+        self.model_selection_mode = "auto"
+        self.manual_model_key = None
+        self.hidden_model_key = self.auto_model_key
+        self.visible_model_name = "OpenCLI"
+        print(f"{Colors.GREEN}Returning to auto mode{Colors.RESET}")
+        self.load_model(self.auto_model_key, self.quant, show_picker=False)
+
+    def _api_key_prompt(self, provider: str) -> str:
+        """Return a session-only API key; never persist it."""
+        definition = PROVIDERS[provider]
+        configured = os.environ.get(definition.environment_variable, "").strip()
+        if configured:
+            return configured
+        if QUESTIONARY_AVAILABLE:
+            value = questionary.password(
+                f"{definition.name} API key ({definition.key_url})"
+            ).ask()
+        else:
+            value = input(f"{definition.name} API key: ")
+        return (value or "").strip()
+
+    def _select_api_provider(self):
+        choices = [
+            questionary.Choice(definition.name, value=key)
+            for key, definition in PROVIDERS.items()
+        ]
+        if QUESTIONARY_AVAILABLE:
+            return questionary.select("API provider:", choices=choices).ask()
+        print("Providers: " + ", ".join(PROVIDERS))
+        value = input("Provider: ").strip().lower()
+        return value if value in PROVIDERS else None
+
+    def _select_api_model(self, client: OpenAICompatibleClient) -> str:
+        """Discover models, with manual entry available if discovery fails."""
+        if not self.permission_manager.request(
+            "api", "list_api_models", client.provider_name,
+            "Request the provider model list using this API key",
+        ):
+            print("API permission denied.")
+            return ""
+        try:
+            models = client.list_models()
+        except ApiProviderError as error:
+            print(f"Could not list models: {error}")
+            models = []
+        if QUESTIONARY_AVAILABLE:
+            choices = [
+                questionary.Choice(model, value=model) for model in models[:100]
+            ]
+            choices.append(questionary.Choice("Enter model ID manually", value="__manual__"))
+            selected = questionary.select("API model:", choices=choices).ask()
+            if selected == "__manual__":
+                return self._model_prompt("API model ID")
+            return selected or ""
+        if models:
+            print("Available: " + ", ".join(models[:20]))
+        return self._model_prompt("API model ID")
+
+    def _activate_api(self, provider: str, api_key: str, model: str) -> bool:
+        """Switch one session to a hosted model after explicit approval."""
+        if not api_key:
+            print("API key is required.")
+            return False
+        try:
+            client = OpenAICompatibleClient(provider, api_key, model)
+        except ValueError as error:
+            print(f"Invalid API configuration: {error}")
+            return False
+        if not self.permission_manager.request(
+            "api", "connect_api", f"{client.provider_name}: {client.model}",
+            "Send chat messages and tool schemas to this hosted API",
+        ):
+            print("API permission denied.")
+            return False
+        if not self.ensure_engine():
+            return False
+        self._save_chat_session()
+        success, message = self.engine.configure_api(client)
+        if not success:
+            print(f"API activation failed: {message}")
+            return False
+        self.api_provider = provider
+        self.api_model = client.model
+        self._api_key = api_key
+        self.mode = "api"
+        self.quant = "api"
+        self.server_stopped_by_user = False
+        self.agent_runtime = None
+        self.api_profiles.save(provider, client.model)
+        print(message)
+        return True
+
+    def configure_api_interactive(self) -> bool:
+        provider = self._select_api_provider()
+        if not provider:
+            print("API setup cancelled.")
+            return False
+        api_key = self._api_key_prompt(provider)
+        if not api_key:
+            print("API setup cancelled: no key entered.")
+            return False
+        try:
+            discovery_client = OpenAICompatibleClient(provider, api_key)
+        except ValueError as error:
+            print(f"Invalid API key setup: {error}")
+            return False
+        model = self._select_api_model(discovery_client)
+        return self._activate_api(provider, api_key, model) if model else False
+
+    def change_api_model_interactive(self) -> bool:
+        if not self.api_provider or not self._api_key:
+            print("No active API session. Run /api first.")
+            return False
+        client = OpenAICompatibleClient(self.api_provider, self._api_key)
+        model = self._select_api_model(client)
+        return self._activate_api(self.api_provider, self._api_key, model) if model else False
+
+    def remove_api_profile_interactive(self) -> bool:
+        profiles = self.api_profiles.profiles
+        if not profiles:
+            print("No saved API profiles. Keys are never saved.")
+            return False
+        entries = list(profiles.items())
+        if QUESTIONARY_AVAILABLE:
+            selected = questionary.select(
+                "Remove saved API profile:",
+                choices=[
+                    questionary.Choice(
+                        f"{PROVIDERS[value['provider']].name} Â· {value['model']}",
+                        value=key,
+                    )
+                    for key, value in entries
+                ],
+            ).ask()
+        else:
+            for index, (_, value) in enumerate(entries, 1):
+                print(f"{index}. {value['provider']} Â· {value['model']}")
+            try:
+                selected = entries[int(input("Profile number: ").strip()) - 1][0]
+            except (ValueError, IndexError, EOFError, KeyboardInterrupt):
+                selected = None
+        if not selected:
+            print("API profile removal cancelled.")
+            return False
+        removed = self.api_profiles.remove(selected)
+        print(f"Removed API profile: {removed['provider']} Â· {removed['model']}")
+        return True
+
+    def start_saved_api_profile(self) -> bool:
+        profile = self.api_profiles.default()
+        if profile is None:
+            print("No saved API profile. Start normally and run /api.")
+            return False
+        return self._activate_api(
+            profile["provider"],
+            self._api_key_prompt(profile["provider"]),
+            profile["model"],
+        )
+
+    def handle_command(self, user_input: str):
+        """Handle slash commands and special commands"""
+
+        lower = user_input.lower().strip()
+
+        # Commands run only in an optional Docker sandbox; no host shell fallback.
+        if user_input.startswith("!"):
+            cmd = user_input[1:].strip()
+            if cmd:
+                if self.dry_run:
+                    print(f"{Colors.DIM}Dry-run command: {cmd}{Colors.RESET}")
+                    return True
+                if not self.sandbox_enabled:
+                    print(f"{Colors.YELLOW}Host shell is disabled. Enable Docker sandbox first: /sandbox on{Colors.RESET}")
+                    return True
+                try:
+                    argv = shlex.split(cmd, posix=True)
+                except ValueError as error:
+                    print(f"{Colors.YELLOW}Invalid command arguments: {error}{Colors.RESET}")
+                    return True
+                if not argv:
+                    print(f"{Colors.YELLOW}Usage: !<argv command> (e.g., !pytest -q){Colors.RESET}")
+                    return True
+                if not self.permission_manager.request(
+                    "command",
+                    "run_sandboxed_command",
+                    " ".join(argv),
+                    "Run user command in isolated Docker sandbox",
+                ):
+                    print(f"{Colors.YELLOW}Command permission denied.{Colors.RESET}")
+                    return True
+                result = self.sandbox.run(argv)
+                if result.get("error"):
+                    print(f"{Colors.YELLOW}{result['error']}{Colors.RESET}")
+                else:
+                    print(result.get("output", ""), end="")
+                    print(f"{Colors.DIM}Sandbox exit: {result['exit_code']}{Colors.RESET}")
+            else:
+                print(f"{Colors.YELLOW}Usage: !<argv command> (e.g., !pytest -q){Colors.RESET}")
+            return True
+
+        # Exit commands
+
+        if lower in ["/exit", "/quit", "/q"]:
+            self.stop_server(mark_stopped=False)
+            print(f"\n{Colors.DIM}Goodbye{Colors.RESET}\n")
+            return False
+
+        if lower == "/endserver":
+            self.stop_server(mark_stopped=True)
+            return True
+
+        if lower == "/api":
+            self.configure_api_interactive()
+            return True
+
+        if lower == "/api-md":
+            self.change_api_model_interactive()
+            return True
+
+        if lower == "/api-del":
+            self.remove_api_profile_interactive()
+            return True
+
+        # Multiline mode toggle
+        if lower in ["/paste", "/multiline"]:
+            self.multiline_mode = not self.multiline_mode
+            status = "enabled" if self.multiline_mode else "disabled"
+            print(f"Multiline/paste mode {status}")
+            return True
+
+        # Help
+        if lower in ["/help", "/h"]:
+            self.show_help()
+            return True
+
+        # Status
+        if lower == "/status":
+            self.show_status()
+            return True
+
+        if lower.startswith("/sandbox"):
+            _, _, value = lower.partition(" ")
+            if value == "on":
+                if not self.sandbox.is_available():
+                    print(f"{Colors.YELLOW}Docker is unavailable. Install/start Docker Desktop; no host-shell fallback exists.{Colors.RESET}")
+                else:
+                    self.sandbox_enabled = True
+                    self._save_chat_session()
+                    self.agent_runtime = None
+                    print("Docker sandbox enabled. Containers start only when a command is requested.")
+            elif value == "off":
+                self.sandbox_enabled = False
+                self._save_chat_session()
+                self.agent_runtime = None
+                print("Docker sandbox disabled.")
+            else:
+                state = "on" if self.sandbox_enabled else "off"
+                available = "ready" if self.sandbox.is_available() else "unavailable"
+                print(f"Docker sandbox: {state} ({available})")
+            return True
+
+        if lower in {"/agent", "/agent status"}:
+            self.show_agent_status()
+            return True
+
+        if lower == "/tools":
+            self.show_tools()
+            return True
+
+        if lower in {"/tools-off", "/tools-on"}:
+            self.tools_enabled = lower == "/tools-on"
+            self._save_chat_session()
+            self.agent_runtime = None
+            print(f"Agent tools {'enabled' if self.tools_enabled else 'disabled'}.")
+            return True
+
+        if lower.startswith("/tool-auto"):
+            _, _, value = lower.partition(" ")
+            if value not in {"on", "off"}:
+                print("Usage: /tool-auto on|off")
+                return True
+            self.auto_tool_routing = value == "on"
+            self._save_chat_session()
+            self.agent_runtime = None
+            print(
+                "Automatic tool routing "
+                f"{'enabled' if self.auto_tool_routing else 'disabled'}."
+            )
+            return True
+
+        if lower == "/history":
+            self.show_history()
+            return True
+
+        if lower.startswith("/web"):
+            _, _, value = lower.partition(" ")
+            if value in {"on", "off"}:
+                self.permission_manager.web_enabled = value == "on"
+            elif value == "always":
+                self.permission_manager.web_enabled = True
+                self.permission_manager.set_persistent_allow("web", True)
+                print("Web tools allowed for this workspace across sessions.")
+                return True
+            elif value == "ask":
+                self.permission_manager.set_persistent_allow("web", False)
+                self.permission_manager.session_allowed.discard("web")
+                self.permission_manager.web_enabled = True
+                print("Web tools will ask for permission.")
+                return True
+            elif value:
+                print("Usage: /web on|off|always|ask")
+                return True
+            state = "on" if self.permission_manager.web_enabled else "off"
+            print(f"Web tools: {state}")
+            return True
+
+        if lower.startswith("/permissions"):
+            _, _, value = lower.partition(" ")
+            if value == "reset":
+                self.permission_manager.reset()
+                print("Workspace permissions reset")
+            self.show_permissions()
+            return True
+
+        if lower in {"/modeladd", "/model-add"}:
+            self.add_model_interactive()
+            return True
+
+        if lower in {"/modelrm", "/model-rm"}:
+            self.remove_model_interactive()
+            return True
+
+        # Clear screen
+        if lower in ["/clear", "/cls"]:
+            self.clear()
+            self.banner()
+            return True
+
+        if lower in {"/new", "/newchat"}:
+            self._new_chat_session()
+            return True
+
+        if lower.startswith("/remember"):
+            _, _, note = user_input.partition(" ")
+            self._remember(note)
+            return True
+
+        if lower.startswith("/memory") or lower.startswith("/mem"):
+            _, _, action = lower.partition(" ")
+            if action == "clear":
+                if self.agent_runtime:
+                    self.agent_runtime.clear()
+                self._save_chat_session()
+                print("Current chat memory cleared.")
+            elif action == "current":
+                if self.chat_session is None:
+                    print("No chat session created yet.")
+                else:
+                    print(f"Current memory: {self.chat_session.path}")
+            else:
+                self._load_memory_archive()
+            return True
+
+        # Model switching â€“ now only "auto" and Qwen models
+        if lower.startswith("/model"):
+            _, _, requested_mode = user_input.partition(" ")
+            mode_key = self._normalize_model_key(requested_mode)
+
+            if mode_key == "" or mode_key == "manual":
+                self.open_model_menu(manual=True)
+                return True
+            if mode_key == "auto":
+                self.set_model_auto()
+                return True
+            if mode_key in self.router_models():
+                self.manual_model_key = mode_key
+                self.model_selection_mode = "manual"
+                self.hidden_model_key = self.auto_model_key
+                self.load_model(mode_key)
+                return True
+            if mode_key in self.MODELS:
+                self.load_model(mode_key)
+                return True
+
+            print(f"{Colors.YELLOW}Usage: /model{Colors.RESET}")
+            return True
+
+        return None
+
+    def stop_server(self, mark_stopped: bool) -> None:
+        """Unload the active model and stop the llama.cpp process OpenCLI owns."""
+        print(f"\n{Colors.DIM}Closing llama.cpp server... This might take a while.{Colors.RESET}")
+        self._save_chat_session()
+        if self.engine is not None:
+            self.engine.unload_model()
+        self.agent_runtime = None
+        self.server_stopped_by_user = mark_stopped
+        print(f"{Colors.DIM}llama.cpp server stopped. Model unloaded.{Colors.RESET}\n")
+
+    def confirm_server_restart(self) -> bool:
+        """Ask before restarting a server deliberately stopped with /endserver."""
+        try:
+            answer = input("llama.cpp server is stopped. Start it again? [Y/n]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return False
+        return answer in {"", "y", "yes"}
+
+    def pick_quant(self, model_name, family):
+        """Quantization picker with polished UI"""
+        r, g, b = FAMILY_COLORS.get(family, FAMILY_COLORS["auto"])
+        color = f"\033[38;2;{r};{g};{b}m"
+
+        print(f"\n{color}â”Œ{'â”€' * 48}â”{Colors.RESET}")
+        print(f"{color}â”‚{Colors.RESET} {Colors.BOLD}Select quantization for {model_name}{Colors.RESET}")
+        print(f"{color}â””{'â”€' * 48}â”˜{Colors.RESET}\n")
+
+        print(f"  {Colors.DIM}[1] INT4{Colors.RESET} â€” Small-fast (2GB+)")
+        print(f"  {Colors.DIM}[2] INT8{Colors.RESET} â€” Higher quality (6GB+)")
+        print(f"  {Colors.DIM}[3] FP16{Colors.RESET} â€” Best quality (8GB+)")
+        print(f"  {Colors.DIM}[4] FP32{Colors.RESET} â€” CPU / Full precision")
+        print(f"\n  {Colors.DIM}Press Enter for INT4{Colors.RESET}")
+
+        try:
+            choice = input(f"  {color}Your choice (1-4):{Colors.RESET} ").strip()
+            quant_map = {"1": "int4", "2": "int8", "3": "fp16", "4": "fp32", "": "int4"}
+            selected = quant_map.get(choice, "int4")
+            print(f"\n  Selected {selected.upper()}")
+            return selected
+        except:
+            return "int4"
+
+    def load_model(self, mode: str, quant: str = None, show_picker: bool = True):
+        """Load model with one muted progress indicator."""
+        if not self.ensure_engine():
+            return False
+
+        # Runtime history is session-owned, not model-owned. Persist it before
+        # changing inference backends and rebuild the runtime afterward.
+        self._save_chat_session()
+        self.agent_runtime = None
+
+        if mode in self.MODELS:
+            model_info = self.MODELS[mode]
+            name, base, family, _ = model_info
+        elif mode in self.router_models():
+            data = self.router_models()[mode]
+            name = data["display_name"]
+            base = data["path"]
+            family = data["family"]
+        else:
+            model_info = self.MODELS["auto"]
+            name, base, family, _ = model_info
+
+        if quant is None and show_picker:
+            quant = self.pick_quant(name, family)
+        elif quant is None:
+            quant = self.quant
+        # API is a backend marker, never a valid local quantization selection.
+        if quant == "api":
+            quant = "int4"
+
+        print()
+        stop_event = threading.Event()
+
+        thread = threading.Thread(
+            target=loading_spinner,
+            args=(f"Loading {name}... This might take several minutes", family, stop_event)
+        )
+        thread.daemon = True
+        thread.start()
+
+        success, message = self.engine.load_model(mode, quant)
+
+        stop_event.set()
+        thread.join(timeout=1.0)
+
+        if success:
+            self.mode = mode
+            self.quant = quant
+            self.server_stopped_by_user = False
+            print()
+            print(f"{Colors.DIM}{name} ready.{Colors.RESET}\n")
+            return True
+        else:
+            print(f"\nError: {message}\n")
+            return False
+
+    def init_engine(self):
+        """Initialize engine with the default interactive profile."""
+        if not self.ensure_engine():
+            return False
+        print(f"{Colors.DIM}{self.engine.get_device_info()}{Colors.RESET}")
+        return self.load_model(self.auto_model_key, self.quant, show_picker=False)
+
+    def show_help(self):
+        """Show help with gradient model names"""
+        # Only show auto profile now
+        model_lines = f"    {gradient_text('auto', 'auto')}  {Colors.DIM}auto Â· local default{Colors.RESET}"
+
+        print(f"""
+{Colors.DIM}{'â•' * 60}{Colors.RESET}
+  {Colors.BOLD}OpenCLI v{self.VERSION}{Colors.RESET}
+{Colors.DIM}{'â•' * 60}{Colors.RESET}
+
+  {Colors.BOLD}Models:{Colors.RESET}
+{model_lines}
+    {Colors.DIM}Official profile: auto (default){Colors.RESET}
+
+  {Colors.BOLD}Quantization:{Colors.RESET}
+    int4      {Colors.DIM}Small-fast{Colors.RESET}
+    int8      {Colors.DIM}Balanced{Colors.RESET}
+    fp16      {Colors.DIM}Best quality{Colors.RESET}
+    fp32      {Colors.DIM}CPU / Full precision{Colors.RESET}
+
+  {Colors.BOLD}Model Switching:{Colors.RESET}
+    /model    {Colors.DIM}Open interactive model picker{Colors.RESET}
+    /model-add {Colors.DIM}Add and load a GGUF model profile{Colors.RESET}
+    /model-rm  {Colors.DIM}Remove a user-added model profile{Colors.RESET}
+    /api       {Colors.DIM}Connect Groq, Gemini, or OpenRouter{Colors.RESET}
+    /api-md    {Colors.DIM}Change active API model{Colors.RESET}
+    /api-del   {Colors.DIM}Remove saved API provider/model profile{Colors.RESET}
+
+  {Colors.BOLD}During Generation:{Colors.RESET}
+    ESC        {Colors.DIM}Stop generation{Colors.RESET}
+    Ctrl+C         {Colors.DIM}Interrupt generation{Colors.RESET}
+
+  {Colors.BOLD}Commands:{Colors.RESET}
+    /help          {Colors.DIM}Show this help{Colors.RESET}
+    /status        {Colors.DIM}Show current status{Colors.RESET}
+    /agent         {Colors.DIM}Show agent runtime status{Colors.RESET}
+    /tools         {Colors.DIM}List available tools{Colors.RESET}
+    /tools-off     {Colors.DIM}Disable tools for quick chat{Colors.RESET}
+    /tools-on      {Colors.DIM}Enable model-requested tools{Colors.RESET}
+    /tool-auto on|off {Colors.DIM}Toggle proactive local routing (off by default){Colors.RESET}
+    /history       {Colors.DIM}Show recent agent history{Colors.RESET}
+    /web on|off|always|ask {Colors.DIM}Set web access and permission policy{Colors.RESET}
+    /sandbox on|off {Colors.DIM}Enable Docker-only command sandbox{Colors.RESET}
+    /permissions   {Colors.DIM}Show workspace permissions{Colors.RESET}
+    /clear         {Colors.DIM}Clear screen{Colors.RESET}
+    /new           {Colors.DIM}Start clean chat session{Colors.RESET}
+    /memory        {Colors.DIM}Load previous workspace session{Colors.RESET}
+    /memory clear  {Colors.DIM}Clear current chat context{Colors.RESET}
+    /memory current {Colors.DIM}Show current Markdown archive{Colors.RESET}
+    /remember TEXT {Colors.DIM}Save explicit note in current archive{Colors.RESET}
+    /model         {Colors.DIM}Switch models with slash syntax{Colors.RESET}
+    /model-add     {Colors.DIM}Add a Hugging Face or local GGUF model (max 10){Colors.RESET}
+    /model-rm      {Colors.DIM}Remove only a saved model profile{Colors.RESET}
+    /endserver     {Colors.DIM}Unload model and stop llama.cpp{Colors.RESET}
+    /exit          {Colors.DIM}Exit OpenCLI{Colors.RESET}
+
+{Colors.DIM}{'â•' * 60}{Colors.RESET}
+""")
+
+    def show_status(self):
+        """Show current status"""
+        if self.mode == "api" and self.api_provider and self.api_model:
+            name = f"{PROVIDERS[self.api_provider].name} Â· {self.api_model}"
+            base = self.api_model
+            family = "auto"
+            has_thinking = False
+        elif self.mode in self.MODELS:
+            name, base, family, has_thinking = self.MODELS[self.mode]
+        elif self.mode in self.router_models():
+            data = self.router_models()[self.mode]
+            name = data["display_name"]
+            base = data["path"]
+            family = data["family"]
+            engine_info = self.engine.MODELS.get(self.mode, {}) if self.engine else {}
+            has_thinking = engine_info.get("has_thinking", False)
+        else:
+            name, base, family, has_thinking = self.MODELS["auto"]
+
+        model_name_colored = gradient_text(name, family)
+
+        print(f"\n{Colors.BOLD}Status:{Colors.RESET}")
+        print(f"  Model: {model_name_colored}")
+        print(f"  Base: {base}")
+        print(f"  Quant: {self.quant.upper()}")
+        print("  KV cache: " + ("N/A" if self.mode == "api" else "Q4"))
+        offload = (
+            "Hosted API"
+            if self.mode == "api"
+            else (
+                "Automatic dGPU + CPU/RAM"
+                if self.engine and self.engine.device == "cuda"
+                else "CPU/RAM"
+            )
+        )
+        print(f"  Offload: {offload}")
+        print(f"  Thinking: {'Available' if has_thinking else 'Not available'}")
+        print(f"  Multiline: {'Enabled' if self.multiline_mode else 'Disabled'}")
+        print(f"  Dry-run: {'Active (simulation)' if self.dry_run else 'Off'}")
+        print(
+            f"  Web tools: "
+            f"{'On' if self.permission_manager.web_enabled else 'Off'}"
+        )
+        print(f"  Agent tools: {'On' if self.tools_enabled else 'Off'}")
+        print(
+            "  Auto tool routing: "
+            f"{'On' if self.auto_tool_routing else 'Off'}"
+        )
+        sandbox_state = "On" if self.sandbox_enabled else "Off"
+        availability = "ready" if self.sandbox.is_available() else "unavailable"
+        print(f"  Docker sandbox: {sandbox_state} ({availability})")
+        print(f"  Custom models: {len(self.custom_models())}/10")
+        print("  Agent runtime: Pydantic AI (local)")
+        print(
+            "  Chat session: "
+            + (self.chat_session.session_id if self.chat_session else "not started")
+        )
+        if self.agent_runtime:
+            print(f"  Agent messages: {self.agent_runtime.message_count}")
+
+        if self.engine:
+            print(f"  Device: {self.engine.get_device_info()}")
+            print(f"  Model loaded: {'Yes' if self.engine.model else 'No'}")
+
+        print()
+
+    def show_permissions(self) -> None:
+        status = self.permission_manager.status()
+        session = ", ".join(status["session_allowed"]) or "none"
+        persistent = ", ".join(status["persistent_allowed"]) or "none"
+        print(f"\n{Colors.BOLD}Permissions:{Colors.RESET}")
+        print(f"  Workspace: {status['workspace']}")
+        print(f"  Web: {'on' if status['web_enabled'] else 'off'}")
+        print(f"  Session allow: {session}")
+        print(f"  Always allow: {persistent}")
+        print("  Reset: /permissions reset\n")
+
+    def show_tools(self) -> None:
+        if not self.tools_enabled:
+            tools = []
+        elif self.agent_runtime:
+            tools = self.agent_runtime.available_tools
+        else:
+            tools = [
+                "list_files",
+                "read_text_file",
+                "search_text",
+                "file_info",
+                "write_text_file",
+                "edit_text_file",
+                "create_directory",
+                "web_search",
+                "web_fetch",
+            ]
+        print(f"\n{Colors.BOLD}Tools:{Colors.RESET}")
+        for name in [*tools, "!<command>"]:
+            print(f"  {name}")
+        print()
+
+    def show_history(self) -> None:
+        if not self.agent_runtime or not self.agent_runtime.message_count:
+            print("\nNo agent history.\n")
+            return
+        print(f"\n{Colors.BOLD}Recent agent history:{Colors.RESET}")
+        print(self.agent_runtime.history_preview())
+        print()
+
+    def show_agent_status(self) -> None:
+        print(f"\n{Colors.BOLD}Agent:{Colors.RESET}")
+        print("  Runtime: Pydantic AI")
+        print(f"  Ready: {'yes' if self.agent_runtime else 'no'}")
+        print(
+            f"  Messages: "
+            f"{self.agent_runtime.message_count if self.agent_runtime else 0}"
+        )
+        print(f"  Workspace: {Path.cwd()}")
+        print(
+            f"  Web: {'on' if self.permission_manager.web_enabled else 'off'}"
+        )
+        print(f"  Tools: {'on' if self.tools_enabled else 'off'}")
+        print(f"  Auto route: {'on' if self.auto_tool_routing else 'off'}")
+        print()
+
+    def query(self, user_input: str, think_mode: bool = False):
+        """Send query to model"""
+
+        if self.server_stopped_by_user:
+            if not self.confirm_server_restart():
+                print(f"{Colors.YELLOW}Server remains stopped. Query cancelled.{Colors.RESET}\n")
+                return
+            self.server_stopped_by_user = False
+
+        if not self.ensure_engine() or not self.engine.model:
+            print(
+                f"\n{Colors.YELLOW}No model loaded. Starting llama.cpp and "
+                f"loading Autoâ€¦{Colors.RESET}"
+            )
+            if not self.load_model(self.auto_model_key, "int4", show_picker=False):
+                return
+
+        engine_info = self.engine.MODELS.get(self.mode, {})
+        family = engine_info.get("family", self.MODELS["auto"][2])
+        has_thinking = engine_info.get("has_thinking", False)
+
+        if think_mode and not has_thinking:
+            print(f"\n{Colors.YELLOW}Thinking mode is not available for the current profile.{Colors.RESET}\n")
+            return
+
+        payload = self.engine.prepare_input_payload(user_input)
+
+        if payload.file_paths:
+            for path in payload.file_paths:
+                print(f"{Colors.DIM}Found: {path.name}{Colors.RESET}")
+            print()
+
+        if payload.clipboard_image_used:
+            print(f"{Colors.DIM}Using image from Windows clipboard{Colors.RESET}\n")
+
+        if not payload.image_attachments and not self.ensure_agent_runtime():
+            return
+
+        self.interrupt_handler.reset()
+
+        response_content = ""
+        response_tokens = 0
+        thinking_shown = False
+        markdown_renderer = StreamingMarkdownRenderer(self.console)
+
+        stop_spinner_event = threading.Event()
+        spinner_thread = threading.Thread(
+            target=loading_spinner,
+            args=("Thinking...", family, stop_spinner_event, 0.08),
+        )
+        spinner_thread.daemon = True
+        spinner_thread.start()
+        self._active_spinner_event = stop_spinner_event
+        self._active_spinner_thread = spinner_thread
+        escape_watcher = EscapeInterruptWatcher(self._interrupt_from_escape)
+        escape_watcher.start()
+
+        try:
+            stream = (
+                self.engine.generate_stream(payload)
+                if payload.image_attachments
+                else self.agent_runtime.generate_stream(payload.enhanced_prompt)
+            )
+            for chunk in stream:
+                chunk_type = chunk.get("type", "")
+                content = chunk.get("content", "")
+
+                if chunk_type == "thinking":
+                    continue
+
+                elif chunk_type == "token":
+                    if content.strip() in ['assistant', 'user', 'system']:
+                        continue
+
+                    if not thinking_shown:
+                        thinking_shown = True
+                        stop_spinner_event.set()
+                        spinner_thread.join(timeout=0.5)
+                        sys.stdout.write(Colors.CLEAR_LINE)
+                        sys.stdout.write(f"{Colors.ASSISTANT}OpenCLI: {Colors.RESET}")
+                        sys.stdout.flush()
+
+                    markdown_renderer.append(content)
+
+                    response_content += content
+                    response_tokens += 1
+
+                elif chunk_type == "status":
+                    if not thinking_shown:
+                        stop_spinner_event.set()
+                        spinner_thread.join(timeout=0.5)
+                        print()
+                    print(f"\n{Colors.DIM}{content}{Colors.RESET}", flush=True)
+
+                elif chunk_type == "tool":
+                    self._stop_active_spinner()
+                    name = chunk.get("name", "tool")
+                    arguments = chunk.get("arguments", {})
+                    target = (
+                        arguments.get("query")
+                        or arguments.get("path")
+                        or arguments.get("url")
+                        or ""
+                    )
+                    print(
+                        f"\n{Colors.DIM}Tool: {name}"
+                        f"{f' ({target})' if target else ''}{Colors.RESET}"
+                    )
+
+                elif chunk_type == "tool_result":
+                    self._stop_active_spinner()
+                    print(
+                        f"{Colors.DIM}Result: {chunk.get('name', 'tool')} â€” "
+                        f"{chunk.get('summary', 'complete')}{Colors.RESET}"
+                    )
+
+                elif chunk_type == "done":
+                    stop_spinner_event.set()
+                    spinner_thread.join(timeout=0.5)
+                    markdown_renderer.flush(force=True)
+                    print(Colors.RESET)
+
+                    resp_tokens = chunk.get("response_tokens", response_tokens)
+
+                    print(f"\n{Colors.DIM}â”€â”€â”€ {resp_tokens} tokens â”€â”€â”€{Colors.RESET}")
+
+                elif chunk_type == "error":
+                    stop_spinner_event.set()
+                    spinner_thread.join(timeout=0.5)
+                    print(f"{Colors.RESET}\n{Colors.RED}Error: {content}{Colors.RESET}")
+
+        except KeyboardInterrupt:
+            self._request_generation_stop()
+            stop_spinner_event.set()
+            spinner_thread.join(timeout=0.5)
+            markdown_renderer.flush(force=True)
+            print(Colors.RESET)
+
+            if response_content:
+                print(f"\n{Colors.DIM}â”€â”€â”€ {response_tokens} tokens (stopped) â”€â”€â”€{Colors.RESET}")
+            else:
+                print(f"\n{Colors.DIM}[Interrupted before any output]{Colors.RESET}")
+
+        except Exception as e:
+            stop_spinner_event.set()
+            spinner_thread.join(timeout=0.5)
+            print(f"{Colors.RESET}\n{Colors.RED}Error: {e}{Colors.RESET}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
+
+        escape_watcher.stop()
+        self._stop_active_spinner()
+        self._active_spinner_event = None
+        self._active_spinner_thread = None
+        self._save_chat_session()
+
+    def run(self, api_start: bool = False):
+        """Main CLI loop with styled input"""
+
+        self.clear()
+        if api_start:
+            if not self.start_saved_api_profile():
+                return
+        self.banner()
+
+        print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+
+        while True:
+            try:
+                # Show context bar
+                ctx = self.context_bar()
+
+                # Get input using styled input bar
+                placeholder = self.get_placeholder()
+                user_input = get_styled_input(
+                    self.get_session(),
+                    placeholder=placeholder,
+                    multiline=self.multiline_mode,
+                    context_bar=ctx
+                )
+
+                if not user_input:
+                    hint = self.get_placeholder()
+                    print(f"{Colors.DIM}Hint: {hint}{Colors.RESET}\n")
+                    continue
+
+                # Check for /think command
+                think_mode = False
+                if user_input.lower().startswith("/think "):
+                    parts = user_input.split(' ', 1)
+                    if len(parts) > 1:
+                        user_input = parts[1].strip()
+                        think_mode = True
+                    else:
+                        print(f"{Colors.YELLOW}Usage: /think - your question here{Colors.RESET}")
+                        continue
+
+                # Handle commands
+                result = self.handle_command(user_input)
+
+                if result is False:
+                    break
+                elif result is True:
+                    print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+                    continue
+
+                self.render_user_message(user_input)
+                self.query(user_input, think_mode=think_mode)
+
+                print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+
+            except KeyboardInterrupt:
+                self.stop_server(mark_stopped=False)
+                print(f"\n\n{Colors.DIM}Goodbye{Colors.RESET}\n")
+                break
+            except EOFError:
+                self.stop_server(mark_stopped=False)
+                print(f"\n\n{Colors.DIM}Goodbye{Colors.RESET}\n")
+                break
+
+
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# MAIN
+# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="opencli",
+        description="OpenCLI â€” local AI workspace with multimodal chat",
+    )
+    parser.add_argument(
+        "-v", "--version", "--ver",
+        action="version",
+        version=f"OpenCLI v{OpenCLI.VERSION}",
+        help="Show version and exit"
+    )
+    parser.add_argument(
+        "-d", "--dry-run",
+        action="store_true",
+        help="Simulate file writes and command execution (no side effects)",
+    )
+    parser.add_argument(
+        "--hf-token",
+        metavar="TOKEN",
+        help="Optional Hugging Face token for this process; prefer HF_TOKEN environment variable.",
+    )
+    parser.add_argument(
+        "--llama-cpp-url",
+        metavar="URL",
+        help="llama.cpp OpenAI-compatible URL for GGUF models (default: http://127.0.0.1:8080/v1).",
+    )
+    parser.add_argument(
+        "--model",
+        metavar="MODEL",
+        help="Built-in or saved user model to load at startup.",
+    )
+    parser.add_argument(
+        "--api",
+        choices=["start"],
+        help="Start the saved API provider/model profile; API key is read from its environment variable or requested privately.",
+    )
+    args, _ = parser.parse_known_args()
+
+    if args.hf_token:
+        os.environ["HF_TOKEN"] = args.hf_token
+    if args.llama_cpp_url:
+        os.environ["OPENCLI_LLAMA_CPP_URL"] = args.llama_cpp_url
+
+    workspace = Path.cwd()
+    if not WorkspaceTrust().confirm(workspace):
+        print("OpenCLI did not trust this folder. Exiting.")
+        return
+
+    cli = OpenCLI(dry_run=args.dry_run, initial_model=args.model)
+    if args.model and args.model not in cli.MODELS and args.model not in cli.router_models():
+        parser.error(f"unknown model: {args.model}")
+    cli.run(api_start=args.api == "start")
+
+
+if __name__ == "__main__":
+    main()

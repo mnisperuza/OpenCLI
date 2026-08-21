@@ -76,6 +76,7 @@ Desktop.ini
 
 # Bert data directory
 .bert/
+BERT.md
 
 # Model cache
 *.bin
