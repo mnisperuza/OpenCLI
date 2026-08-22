@@ -43,6 +43,19 @@ class WorkspaceToolSafetyTests(TestCase):
             self.assertTrue(tools.write_text_file(".env", "other")["protected"])
             self.assertEqual(protected.read_text(encoding="utf-8"), "SECRET=value")
 
+    def test_agent_cannot_modify_workspace_configuration(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = root / ".opencli" / "config.toml"
+            config.parent.mkdir()
+            config.write_text("[models]", encoding="utf-8")
+            tools = LocalWorkspaceTools(root, RuntimeConfig())
+
+            result = tools.write_text_file(".opencli/config.toml", "changed")
+
+            self.assertTrue(result["protected"])
+            self.assertEqual(config.read_text(encoding="utf-8"), "[models]")
+
     def test_edit_requires_exactly_one_match(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

@@ -70,6 +70,29 @@ class ApiProviderClientTests(unittest.TestCase):
             {"path": "a.txt", "content": "ok"},
         )
 
+    def test_stream_exposes_provider_reported_usage(self):
+        lines = [
+            b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}\n',
+            b"data: [DONE]\n",
+        ]
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(lines=lines)):
+            events = list(client.stream_chat([], []))
+        self.assertEqual(
+            events,
+            [{"type": "usage", "input_tokens": 12, "output_tokens": 4}],
+        )
+
+    def test_profile_output_limit_reaches_api_request(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        client.max_output_tokens = 2048
+        with patch(
+            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+        ) as call:
+            list(client.stream_chat([], []))
+        body = json.loads(call.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(body["max_tokens"], 2048)
+
     def test_profiles_persist_provider_and_model_but_not_key(self):
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "api-profiles.json"

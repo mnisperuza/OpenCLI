@@ -1,8 +1,8 @@
-﻿"""
+"""
 OpenCLI terminal interface
 
 By Matias Nisperuza
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+══════════════════════════════════════════════════════════════════════════════
 
 Legacy changes:
 - Fixed paste support
@@ -33,10 +33,12 @@ from main.api_profiles import ApiProfileRegistry
 from main.api_providers import ApiProviderError, OpenAICompatibleClient, PROVIDERS
 from main.sandbox import DockerSandbox
 from main.session_memory import SessionMemoryStore
+from main.context_accounting import ContextAccountingService, format_token_count
+from main.model_profiles import ModelProfileRegistry
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # MODERN UI IMPORTS (Rich & Prompt Toolkit)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 from rich.console import Console
 from rich.panel import Panel
@@ -247,9 +249,9 @@ class StreamingMarkdownRenderer:
 # Platform detection
 IS_WINDOWS = sys.platform == 'win32'
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # KEYBOARD INPUT HANDLING (Cross-platform fallback)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 if IS_WINDOWS:
     try:
@@ -296,9 +298,9 @@ class EscapeInterruptWatcher:
                 return
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # LAZY ENGINE IMPORT
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 ENGINE_AVAILABLE = False
 _engine_module = None
@@ -338,9 +340,9 @@ def ensure_engine_imported() -> bool:
     return _import_engine()
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # COLORS & TERMINAL THEMES
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class Colors:
     RESET = "\033[0m"
@@ -377,16 +379,16 @@ class Colors:
         return f"\033[48;2;{max(0,min(255,int(r)))};{max(0,min(255,int(g)))};{max(0,min(255,int(b)))}m"
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # TERMINAL THEME MANAGER
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-# GRADIENTS (per model family) - Updated: removed bert/engineer, renamed miniâ†’auto
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
+# GRADIENTS (per model family) - Updated: removed bert/engineer, renamed mini→auto
+# ═══════════════════════════════════════════════════════════════════════════════
 
 GRADIENTS = {
-    # Auto: Teal-Mint (fresh, balanced) â€“ same as previous "mini"
+    # Auto: Teal-Mint (fresh, balanced) – same as previous "mini"
     "auto": [
         (170, 170, 170),
 
@@ -413,11 +415,11 @@ def get_input_bar_colors() -> dict:
     }
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # ANIMATION FUNCTIONS
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
-BRAILLE = ["â ‹", "â ™", "â ¹", "â ¸", "â ¼", "â ´", "â ¦", "â §", "â ‡", "â "]
+BRAILLE = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 def loading_spinner(message, family, stop_event, speed=0.08):
@@ -449,9 +451,9 @@ def gradient_text(text, family):
     return f"{Colors.YELLOW}{text}{Colors.RESET}"
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # STYLED INPUT
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def get_styled_input(session: PromptSession, placeholder: str = "Type your message...",
                      multiline: bool = False,
@@ -478,7 +480,7 @@ def get_styled_input(session: PromptSession, placeholder: str = "Type your messa
         # === MULTILINE MODE ===
         # For pasting large texts - press Enter twice to submit
 
-        print(f"\n{bc}â”€â”€â”€ Paste Mode (press Enter twice to submit) â”€â”€â”€{Colors.RESET}")
+        print(f"\n{bc}─── Paste Mode (press Enter twice to submit) ───{Colors.RESET}")
         sys.stdout.write(f"{prompt_color}>{Colors.RESET} {tc}")
         sys.stdout.flush()
 
@@ -493,7 +495,7 @@ def get_styled_input(session: PromptSession, placeholder: str = "Type your messa
                     first_line = False
                 else:
                     # Continuation prompt
-                    sys.stdout.write(f"{prompt_color}â”‚{Colors.RESET} {tc}")
+                    sys.stdout.write(f"{prompt_color}│{Colors.RESET} {tc}")
                     sys.stdout.flush()
                     line = input()
 
@@ -508,7 +510,7 @@ def get_styled_input(session: PromptSession, placeholder: str = "Type your messa
             pass
 
         sys.stdout.write(Colors.RESET)
-        print(f"{bc}â”€â”€â”€ End â”€â”€â”€{Colors.RESET}\n")
+        print(f"{bc}─── End ───{Colors.RESET}\n")
 
         return "\n".join(lines)
 
@@ -540,13 +542,13 @@ def erase_submitted_single_line(user_input: str) -> None:
     sys.stdout.flush()
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # THINKING BOX
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # OPENCLI
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 class OpenCLI:
     VERSION = __version__
@@ -626,6 +628,13 @@ class OpenCLI:
             Path.cwd(), approval_callback=self.request_tool_permission
         )
         self.model_registry = ModelRegistry()
+        self.model_profiles = ModelProfileRegistry(Path.cwd())
+        initial_profile = self.model_profiles.resolve(
+            key=self.auto_model_key,
+            model_id=self.MODELS["auto"][1],
+            backend="llama_cpp",
+        )
+        self.context_accounting = ContextAccountingService(initial_profile)
         self.api_profiles = ApiProfileRegistry()
         self.api_provider = None
         self.api_model = None
@@ -703,6 +712,7 @@ class OpenCLI:
         self._save_chat_session()
         self.agent_runtime = None
         self.chat_session = self.session_memory.create()
+        self.context_accounting.reset_usage()
         print(f"New chat: {self.chat_session.path.name}")
 
     def _select_memory_archive(self):
@@ -821,19 +831,19 @@ class OpenCLI:
         loaded = bool(self.engine and getattr(self.engine, "model", None))
         if self.mode == "api" and self.api_provider and self.api_model:
             body = (
-                f"[bold]Active:[/bold] {PROVIDERS[self.api_provider].name} Â· "
+                f"[bold]Active:[/bold] {PROVIDERS[self.api_provider].name} · "
                 f"{self.api_model}\n"
-                "[dim]/api-md[/dim] change model Â· [dim]/model[/dim] return local"
+                "[dim]/api-md[/dim] change model · [dim]/model[/dim] return local"
             )
         elif loaded:
             body = (
                 f"[bold]Active:[/bold] {self.context_bar()}\n"
-                "[dim]/model[/dim] switch Â· [dim]/api[/dim] connect a hosted model"
+                "[dim]/model[/dim] switch · [dim]/api[/dim] connect a hosted model"
             )
         else:
             body = (
                 "[bold]No model loaded[/bold]\n"
-                "[dim]/model[/dim] choose local Â· [dim]/api[/dim] connect hosted Â· "
+                "[dim]/model[/dim] choose local · [dim]/api[/dim] connect hosted · "
                 "send a message to start Auto"
             )
         self.console.print(
@@ -854,9 +864,9 @@ class OpenCLI:
         return placeholder
 
     def context_bar(self) -> str:
-        """Generate context bar with gradient model name"""
+        """Generate model and context-occupancy status bar."""
         if self.mode == "api" and self.api_provider and self.api_model:
-            name = f"{PROVIDERS[self.api_provider].name} Â· {self.api_model}"
+            name = f"{PROVIDERS[self.api_provider].name} · {self.api_model}"
         elif not self.engine or not getattr(self.engine, "model", None):
             name = "No model loaded"
         elif self.mode in self.MODELS:
@@ -869,7 +879,166 @@ class OpenCLI:
         else:
             name, base, family, _ = self.MODELS["auto"]
 
-        return f"{Colors.PALE_GREEN}[{name}]{Colors.RESET}"
+        snapshot = self._context_snapshot()
+        filled = min(10, max(0, round(snapshot.percent_used / 10)))
+        meter = "#" * filled + "-" * (10 - filled)
+        color = (
+            Colors.RED
+            if snapshot.percent_used >= 85
+            else Colors.YELLOW if snapshot.percent_used >= 70 else Colors.PALE_GREEN
+        )
+        estimate = "~" if snapshot.estimated else ""
+        usage = (
+            f"{estimate}{format_token_count(snapshot.used_tokens)}/"
+            f"{format_token_count(snapshot.profile.context_window)}"
+        )
+        return (
+            f"{Colors.PALE_GREEN}[{name}]{Colors.RESET} "
+            f"{color}[ctx {meter} {snapshot.percent_used:.0f}% {usage}]"
+            f"{Colors.RESET}"
+        )
+
+    def _model_profile_inputs(self):
+        if self.mode == "api" and self.api_model:
+            key = self.api_model
+            model_id = self.api_model
+            backend = "remote_api"
+            provider = self.api_provider
+        elif self.mode in self.MODELS:
+            key = self.mode
+            model_id = self.MODELS[self.mode][1]
+            backend = "llama_cpp"
+            provider = None
+        else:
+            data = self.router_models().get(self.mode, {})
+            key = self.mode
+            model_id = str(data.get("path") or self.mode)
+            backend = str(data.get("backend") or "llama_cpp")
+            provider = None
+        metadata = {}
+        if self.engine and self.mode != "api":
+            metadata = self.engine.MODELS.get(self.mode, {})
+        if not metadata and self.mode in self.router_models():
+            metadata = self.router_models()[self.mode]
+        return key, model_id, backend, provider, metadata
+
+    def _tokenizer_counter(self):
+        tokenizer = getattr(self.engine, "tokenizer", None) if self.engine else None
+        if tokenizer is None or not hasattr(tokenizer, "encode"):
+            return None
+
+        def count(text: str) -> int:
+            try:
+                return len(tokenizer.encode(text, add_special_tokens=False))
+            except TypeError:
+                return len(tokenizer.encode(text))
+
+        return count
+
+    def _refresh_context_profile(self):
+        key, model_id, backend, provider, metadata = self._model_profile_inputs()
+        profile = self.model_profiles.resolve(
+            key=key,
+            model_id=model_id,
+            backend=backend,
+            provider=provider,
+            metadata=metadata,
+        )
+        self.context_accounting.set_profile(profile, self._tokenizer_counter())
+        return profile
+
+    def _context_components(self, current_prompt: str = "") -> dict:
+        if self.agent_runtime:
+            return self.agent_runtime.context_components(current_prompt)
+        tools = "\n".join(
+            [
+                "list_files", "read_text_file", "search_text", "file_info",
+                "write_text_file", "edit_text_file", "create_directory",
+                "web_search", "web_fetch",
+            ]
+            if self.tools_enabled else []
+        )
+        return {
+            "instructions": (
+                "OpenCLI workspace assistant. Use approved tools for workspace "
+                "evidence and changes. Never invent tool results."
+            ),
+            "tool schemas": tools,
+            "history": "",
+            "current prompt": current_prompt,
+        }
+
+    def _context_snapshot(self, current_prompt: str = ""):
+        self._refresh_context_profile()
+        return self.context_accounting.snapshot(
+            self._context_components(current_prompt)
+        )
+
+    def show_context(self) -> None:
+        snapshot = self._context_snapshot()
+        marker = "estimated" if snapshot.estimated else "tokenizer exact"
+        print(f"\n{Colors.BOLD}Context:{Colors.RESET}")
+        print(f"  Profile: {snapshot.profile.display_name}")
+        print(f"  Model ID: {snapshot.profile.model_id}")
+        print(f"  Source: {snapshot.profile.source}")
+        capabilities = [
+            name
+            for name, enabled in (
+                ("tools", snapshot.profile.supports_tools),
+                ("vision", snapshot.profile.supports_vision),
+                ("reasoning", snapshot.profile.supports_reasoning),
+            )
+            if enabled
+        ]
+        print(f"  Capabilities: {', '.join(capabilities) or 'unknown'}")
+        print(f"  Measurement: {marker}")
+        for name, count in snapshot.components.items():
+            print(f"  {name.title()}: {format_token_count(count)}")
+        print(
+            f"  Used: {format_token_count(snapshot.used_tokens)} / "
+            f"{format_token_count(snapshot.profile.context_window)} "
+            f"({snapshot.percent_used:.1f}%)"
+        )
+        print(f"  Output reserve: {format_token_count(snapshot.output_reserve)}")
+        print(f"  Available input: {format_token_count(snapshot.available_tokens)}")
+        for warning in self.model_profiles.warnings:
+            print(f"  Warning: {warning}")
+        print()
+
+    def show_usage(self) -> None:
+        usage = self.context_accounting.usage
+        estimate = (
+            "no turns"
+            if not usage.turns
+            else "estimated" if usage.estimated_turns else "reported"
+        )
+        print(f"\n{Colors.BOLD}Session usage:{Colors.RESET}")
+        print(f"  Turns: {usage.turns}")
+        print(f"  Input: {format_token_count(usage.input_tokens)}")
+        print(f"  Output: {format_token_count(usage.output_tokens)}")
+        print(f"  Total: {format_token_count(usage.total_tokens)}")
+        print(
+            f"  Last: {format_token_count(usage.last_input_tokens)} input, "
+            f"{format_token_count(usage.last_output_tokens)} output"
+        )
+        print(f"  Measurement: {estimate}")
+        print()
+
+    def show_prompt_size(self) -> None:
+        self._refresh_context_profile()
+        components = self._context_components()
+        fixed = {
+            name: value
+            for name, value in components.items()
+            if name in {"instructions", "tool schemas"}
+        }
+        snapshot = self.context_accounting.snapshot(fixed, output_reserve=1)
+        marker = "estimated" if snapshot.estimated else "tokenizer exact"
+        print(f"\n{Colors.BOLD}Fixed prompt size:{Colors.RESET}")
+        for name, count in snapshot.components.items():
+            print(f"  {name.title()}: {format_token_count(count)}")
+        print(f"  Total: {format_token_count(snapshot.used_tokens)} ({marker})")
+        print()
 
     def router_models(self) -> dict:
         """Return built-in and persistent user-added model menu entries."""
@@ -936,16 +1105,16 @@ class OpenCLI:
         if self.model_selection_mode == "auto" and not manual:
             if QUESTIONARY_AVAILABLE:
                 choice = questionary.select(
-                    "Â¿QuÃ© deseas hacer?",
+                    "¿Qué deseas hacer?",
                     choices=[
                         questionary.Choice("Seguir en modo Auto", value="auto"),
                         questionary.Choice("Cambiar a modo Manual", value="manual"),
                     ],
                     use_arrow_keys=True,
-                    qmark="â€¢",
+                    qmark="•",
                 ).ask()
             else:
-                choice = input("Â¿QuÃ© deseas hacer? [auto/manual]: ").strip().lower()
+                choice = input("¿Qué deseas hacer? [auto/manual]: ").strip().lower()
 
             if choice == "manual":
                 self.select_model_interactive()
@@ -960,7 +1129,7 @@ class OpenCLI:
             choices = []
             active_key = self.get_active_model_key()
             for key, data in self.router_models().items():
-                title = f"{data['display_name']} â€” {data['vram']} â€” {data['usage']}"
+                title = f"{data['display_name']} — {data['vram']} — {data['usage']}"
                 if key == active_key:
                     title = f"{title}"
                 choices.append(questionary.Choice(title=title, value=key))
@@ -969,16 +1138,16 @@ class OpenCLI:
                 "Select an agent model:",
                 choices=choices,
                 use_arrow_keys=True,
-                qmark="â€¢",
+                qmark="•",
             ).ask()
         else:
-            print("questionary no estÃ¡ disponible; ingresa la clave del modelo:")
+            print("questionary no está disponible; ingresa la clave del modelo:")
             for key, data in self.router_models().items():
                 print(f"  {key}: {data['display_name']} ({data['vram']})")
             selection = input("Modelo: ").strip().lower()
 
         if not selection or selection not in self.router_models():
-            print(f"{Colors.YELLOW}SelecciÃ³n invÃ¡lida o cancelada.{Colors.RESET}")
+            print(f"{Colors.YELLOW}Selección inválida o cancelada.{Colors.RESET}")
             return
 
         self.manual_model_key = selection
@@ -1082,7 +1251,7 @@ class OpenCLI:
         self.hidden_model_key = self.auto_model_key
         self._save_chat_session()
         self.agent_runtime = None
-        print(f"{Colors.GREEN}Model saved. Loading {name}â€¦{Colors.RESET}")
+        print(f"{Colors.GREEN}Model saved. Loading {name}…{Colors.RESET}")
         self.load_model(key, self.quant, show_picker=False)
 
     def remove_model_interactive(self) -> None:
@@ -1218,6 +1387,17 @@ class OpenCLI:
         self._api_key = api_key
         self.mode = "api"
         self.quant = "api"
+        profile = self.model_profiles.resolve(
+            key=client.model,
+            model_id=client.model,
+            backend="remote_api",
+            provider=provider,
+        )
+        client.max_output_tokens = profile.max_output_tokens
+        engine_models = getattr(self.engine, "MODELS", {})
+        if "api" in engine_models:
+            engine_models["api"]["context"] = profile.context_window
+            engine_models["api"]["max_tokens"] = profile.max_output_tokens
         self.server_stopped_by_user = False
         self.agent_runtime = None
         self.api_profiles.save(provider, client.model)
@@ -1260,7 +1440,7 @@ class OpenCLI:
                 "Remove saved API profile:",
                 choices=[
                     questionary.Choice(
-                        f"{PROVIDERS[value['provider']].name} Â· {value['model']}",
+                        f"{PROVIDERS[value['provider']].name} · {value['model']}",
                         value=key,
                     )
                     for key, value in entries
@@ -1268,7 +1448,7 @@ class OpenCLI:
             ).ask()
         else:
             for index, (_, value) in enumerate(entries, 1):
-                print(f"{index}. {value['provider']} Â· {value['model']}")
+                print(f"{index}. {value['provider']} · {value['model']}")
             try:
                 selected = entries[int(input("Profile number: ").strip()) - 1][0]
             except (ValueError, IndexError, EOFError, KeyboardInterrupt):
@@ -1277,7 +1457,7 @@ class OpenCLI:
             print("API profile removal cancelled.")
             return False
         removed = self.api_profiles.remove(selected)
-        print(f"Removed API profile: {removed['provider']} Â· {removed['model']}")
+        print(f"Removed API profile: {removed['provider']} · {removed['model']}")
         return True
 
     def start_saved_api_profile(self) -> bool:
@@ -1370,6 +1550,18 @@ class OpenCLI:
         # Status
         if lower == "/status":
             self.show_status()
+            return True
+
+        if lower == "/context":
+            self.show_context()
+            return True
+
+        if lower == "/usage":
+            self.show_usage()
+            return True
+
+        if lower == "/prompt-size":
+            self.show_prompt_size()
             return True
 
         if lower.startswith("/sandbox"):
@@ -1495,7 +1687,7 @@ class OpenCLI:
                 self._load_memory_archive()
             return True
 
-        # Model switching â€“ now only "auto" and Qwen models
+        # Model switching – now only "auto" and Qwen models
         if lower.startswith("/model"):
             _, _, requested_mode = user_input.partition(" ")
             mode_key = self._normalize_model_key(requested_mode)
@@ -1545,14 +1737,14 @@ class OpenCLI:
         r, g, b = FAMILY_COLORS.get(family, FAMILY_COLORS["auto"])
         color = f"\033[38;2;{r};{g};{b}m"
 
-        print(f"\n{color}â”Œ{'â”€' * 48}â”{Colors.RESET}")
-        print(f"{color}â”‚{Colors.RESET} {Colors.BOLD}Select quantization for {model_name}{Colors.RESET}")
-        print(f"{color}â””{'â”€' * 48}â”˜{Colors.RESET}\n")
+        print(f"\n{color}┌{'─' * 48}┐{Colors.RESET}")
+        print(f"{color}│{Colors.RESET} {Colors.BOLD}Select quantization for {model_name}{Colors.RESET}")
+        print(f"{color}└{'─' * 48}┘{Colors.RESET}\n")
 
-        print(f"  {Colors.DIM}[1] INT4{Colors.RESET} â€” Small-fast (2GB+)")
-        print(f"  {Colors.DIM}[2] INT8{Colors.RESET} â€” Higher quality (6GB+)")
-        print(f"  {Colors.DIM}[3] FP16{Colors.RESET} â€” Best quality (8GB+)")
-        print(f"  {Colors.DIM}[4] FP32{Colors.RESET} â€” CPU / Full precision")
+        print(f"  {Colors.DIM}[1] INT4{Colors.RESET} — Small-fast (2GB+)")
+        print(f"  {Colors.DIM}[2] INT8{Colors.RESET} — Higher quality (6GB+)")
+        print(f"  {Colors.DIM}[3] FP16{Colors.RESET} — Best quality (8GB+)")
+        print(f"  {Colors.DIM}[4] FP32{Colors.RESET} — CPU / Full precision")
         print(f"\n  {Colors.DIM}Press Enter for INT4{Colors.RESET}")
 
         try:
@@ -1585,6 +1777,18 @@ class OpenCLI:
         else:
             model_info = self.MODELS["auto"]
             name, base, family, _ = model_info
+
+        engine_models = getattr(self.engine, "MODELS", {})
+        engine_metadata = engine_models.get(mode, {})
+        profile = self.model_profiles.resolve(
+            key=mode,
+            model_id=base,
+            backend=str(engine_metadata.get("backend") or "llama_cpp"),
+            metadata=engine_metadata,
+        )
+        if mode in engine_models:
+            engine_models[mode]["context"] = profile.context_window
+            engine_models[mode]["max_tokens"] = profile.max_output_tokens
 
         if quant is None and show_picker:
             quant = self.pick_quant(name, family)
@@ -1630,12 +1834,12 @@ class OpenCLI:
     def show_help(self):
         """Show help with gradient model names"""
         # Only show auto profile now
-        model_lines = f"    {gradient_text('auto', 'auto')}  {Colors.DIM}auto Â· local default{Colors.RESET}"
+        model_lines = f"    {gradient_text('auto', 'auto')}  {Colors.DIM}auto · local default{Colors.RESET}"
 
         print(f"""
-{Colors.DIM}{'â•' * 60}{Colors.RESET}
+{Colors.DIM}{'═' * 60}{Colors.RESET}
   {Colors.BOLD}OpenCLI v{self.VERSION}{Colors.RESET}
-{Colors.DIM}{'â•' * 60}{Colors.RESET}
+{Colors.DIM}{'═' * 60}{Colors.RESET}
 
   {Colors.BOLD}Models:{Colors.RESET}
 {model_lines}
@@ -1662,6 +1866,9 @@ class OpenCLI:
   {Colors.BOLD}Commands:{Colors.RESET}
     /help          {Colors.DIM}Show this help{Colors.RESET}
     /status        {Colors.DIM}Show current status{Colors.RESET}
+    /context       {Colors.DIM}Show model-aware context usage{Colors.RESET}
+    /usage         {Colors.DIM}Show session token usage{Colors.RESET}
+    /prompt-size   {Colors.DIM}Show fixed prompt cost{Colors.RESET}
     /agent         {Colors.DIM}Show agent runtime status{Colors.RESET}
     /tools         {Colors.DIM}List available tools{Colors.RESET}
     /tools-off     {Colors.DIM}Disable tools for quick chat{Colors.RESET}
@@ -1683,13 +1890,13 @@ class OpenCLI:
     /endserver     {Colors.DIM}Unload model and stop llama.cpp{Colors.RESET}
     /exit          {Colors.DIM}Exit OpenCLI{Colors.RESET}
 
-{Colors.DIM}{'â•' * 60}{Colors.RESET}
+{Colors.DIM}{'═' * 60}{Colors.RESET}
 """)
 
     def show_status(self):
         """Show current status"""
         if self.mode == "api" and self.api_provider and self.api_model:
-            name = f"{PROVIDERS[self.api_provider].name} Â· {self.api_model}"
+            name = f"{PROVIDERS[self.api_provider].name} · {self.api_model}"
             base = self.api_model
             family = "auto"
             has_thinking = False
@@ -1738,6 +1945,14 @@ class OpenCLI:
         availability = "ready" if self.sandbox.is_available() else "unavailable"
         print(f"  Docker sandbox: {sandbox_state} ({availability})")
         print(f"  Custom models: {len(self.custom_models())}/10")
+        context = self._context_snapshot()
+        marker = "~" if context.estimated else ""
+        print(
+            f"  Context: {marker}{format_token_count(context.used_tokens)} / "
+            f"{format_token_count(context.profile.context_window)} "
+            f"({context.percent_used:.1f}%)"
+        )
+        print(f"  Context profile: {context.profile.source}")
         print("  Agent runtime: Pydantic AI (local)")
         print(
             "  Chat session: "
@@ -1821,7 +2036,7 @@ class OpenCLI:
         if not self.ensure_engine() or not self.engine.model:
             print(
                 f"\n{Colors.YELLOW}No model loaded. Starting llama.cpp and "
-                f"loading Autoâ€¦{Colors.RESET}"
+                f"loading Auto…{Colors.RESET}"
             )
             if not self.load_model(self.auto_model_key, "int4", show_picker=False):
                 return
@@ -1851,6 +2066,10 @@ class OpenCLI:
 
         response_content = ""
         response_tokens = 0
+        reported_input_tokens = None
+        reported_output_tokens = None
+        turn_started = False
+        turn_snapshot = self._context_snapshot(payload.enhanced_prompt)
         thinking_shown = False
         markdown_renderer = StreamingMarkdownRenderer(self.console)
 
@@ -1872,6 +2091,7 @@ class OpenCLI:
                 if payload.image_attachments
                 else self.agent_runtime.generate_stream(payload.enhanced_prompt)
             )
+            turn_started = True
             for chunk in stream:
                 chunk_type = chunk.get("type", "")
                 content = chunk.get("content", "")
@@ -1921,7 +2141,7 @@ class OpenCLI:
                 elif chunk_type == "tool_result":
                     self._stop_active_spinner()
                     print(
-                        f"{Colors.DIM}Result: {chunk.get('name', 'tool')} â€” "
+                        f"{Colors.DIM}Result: {chunk.get('name', 'tool')} — "
                         f"{chunk.get('summary', 'complete')}{Colors.RESET}"
                     )
 
@@ -1931,9 +2151,33 @@ class OpenCLI:
                     markdown_renderer.flush(force=True)
                     print(Colors.RESET)
 
-                    resp_tokens = chunk.get("response_tokens", response_tokens)
+                    if isinstance(chunk.get("input_tokens"), int):
+                        reported_input_tokens = chunk["input_tokens"]
+                    if isinstance(chunk.get("output_tokens"), int):
+                        reported_output_tokens = chunk["output_tokens"]
+                    estimated_output, _ = self.context_accounting.count_text(
+                        response_content
+                    )
+                    shown_output = (
+                        reported_output_tokens
+                        if isinstance(reported_output_tokens, int)
+                        else estimated_output
+                    )
+                    marker = "" if isinstance(reported_output_tokens, int) else "~"
+                    print(
+                        f"\n{Colors.DIM}─── {marker}{shown_output} tokens "
+                        f"───{Colors.RESET}"
+                    )
 
-                    print(f"\n{Colors.DIM}â”€â”€â”€ {resp_tokens} tokens â”€â”€â”€{Colors.RESET}")
+                elif chunk_type == "usage":
+                    if isinstance(chunk.get("input_tokens"), int):
+                        reported_input_tokens = (
+                            (reported_input_tokens or 0) + chunk["input_tokens"]
+                        )
+                    if isinstance(chunk.get("output_tokens"), int):
+                        reported_output_tokens = (
+                            (reported_output_tokens or 0) + chunk["output_tokens"]
+                        )
 
                 elif chunk_type == "error":
                     stop_spinner_event.set()
@@ -1948,7 +2192,8 @@ class OpenCLI:
             print(Colors.RESET)
 
             if response_content:
-                print(f"\n{Colors.DIM}â”€â”€â”€ {response_tokens} tokens (stopped) â”€â”€â”€{Colors.RESET}")
+                stopped_tokens, _ = self.context_accounting.count_text(response_content)
+                print(f"\n{Colors.DIM}─── ~{stopped_tokens} tokens (stopped) ───{Colors.RESET}")
             else:
                 print(f"\n{Colors.DIM}[Interrupted before any output]{Colors.RESET}")
 
@@ -1959,6 +2204,26 @@ class OpenCLI:
             if self.debug:
                 import traceback
                 traceback.print_exc()
+
+        if turn_started:
+            output_estimate, output_is_estimated = self.context_accounting.count_text(
+                response_content
+            )
+            has_reported_usage = (
+                isinstance(reported_input_tokens, int)
+                and reported_input_tokens >= 0
+                and isinstance(reported_output_tokens, int)
+                and reported_output_tokens >= 0
+            )
+            self.context_accounting.record_turn(
+                reported_input_tokens if has_reported_usage else turn_snapshot.used_tokens,
+                reported_output_tokens if has_reported_usage else output_estimate,
+                estimated=(
+                    not has_reported_usage
+                    or turn_snapshot.estimated
+                    or output_is_estimated
+                ),
+            )
 
         escape_watcher.stop()
         self._stop_active_spinner()
@@ -1975,7 +2240,7 @@ class OpenCLI:
                 return
         self.banner()
 
-        print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+        print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
 
         while True:
             try:
@@ -2013,13 +2278,13 @@ class OpenCLI:
                 if result is False:
                     break
                 elif result is True:
-                    print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+                    print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
                     continue
 
                 self.render_user_message(user_input)
                 self.query(user_input, think_mode=think_mode)
 
-                print(f"{Colors.DIM}{'â”€' * 60}{Colors.RESET}")
+                print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
 
             except KeyboardInterrupt:
                 self.stop_server(mark_stopped=False)
@@ -2031,14 +2296,14 @@ class OpenCLI:
                 break
 
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 # MAIN
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ═══════════════════════════════════════════════════════════════════════════════
 
 def main():
     parser = argparse.ArgumentParser(
         prog="opencli",
-        description="OpenCLI â€” local AI workspace with multimodal chat",
+        description="OpenCLI — local AI workspace with multimodal chat",
     )
     parser.add_argument(
         "-v", "--version", "--ver",

@@ -66,6 +66,7 @@ class OpenAICompatibleClient:
             raise ValueError("API key cannot be empty")
         self.model = self.normalize_model_id(model)
         self.timeout_seconds = timeout_seconds
+        self.max_output_tokens: Optional[int] = None
 
     @staticmethod
     def normalize_model_id(value: str) -> str:
@@ -165,6 +166,8 @@ class OpenAICompatibleClient:
             "messages": messages,
             "stream": True,
         }
+        if isinstance(self.max_output_tokens, int) and self.max_output_tokens > 0:
+            body["max_tokens"] = self.max_output_tokens
         if tools:
             body["tools"] = tools
             body["tool_choice"] = "auto"
@@ -186,15 +189,30 @@ class OpenAICompatibleClient:
                         break
                     try:
                         payload = json.loads(data)
+                        if not isinstance(payload, dict):
+                            continue
                         if payload.get("error"):
                             detail = " ".join(str(payload["error"]).split())[:1_000]
                             detail = detail.replace(self.api_key, "[redacted]")
                             raise ApiProviderError(
                                 f"{self.provider_name} API error: {detail}"
                             )
-                        delta = payload["choices"][0].get("delta", {})
-                    except (KeyError, IndexError, TypeError, json.JSONDecodeError):
+                    except (TypeError, json.JSONDecodeError):
                         continue
+                    usage = payload.get("usage")
+                    if isinstance(usage, dict):
+                        input_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+                        output_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+                        if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+                            yield {
+                                "type": "usage",
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                            }
+                    choices = payload.get("choices") or []
+                    if not choices or not isinstance(choices[0], dict):
+                        continue
+                    delta = choices[0].get("delta", {})
                     content = delta.get("content")
                     if isinstance(content, str) and content:
                         yield {"type": "token", "content": content}

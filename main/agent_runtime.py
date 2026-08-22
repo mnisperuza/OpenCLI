@@ -64,6 +64,8 @@ class RuntimeConfig:
         ".git/**",
         ".env",
         ".env.*",
+        ".opencli",
+        ".opencli/**",
         "*.pem",
         "*.key",
         "**/secrets*",
@@ -631,6 +633,10 @@ class LocalModelAdapter:
         ]
         seen_calls: set[str] = set()
         for event in client.stream_chat(self._openai_messages(messages), tools):
+            if event.get("type") == "usage":
+                if self.event_sink:
+                    self.event_sink(dict(event))
+                continue
             if event.get("type") == "token":
                 yield event.get("content", "")
                 continue
@@ -996,6 +1002,17 @@ class PydanticAgentRuntime:
                 "Do not claim files, web sources, commands, or other external actions "
                 "were used. Keep answers concise."
             )
+        self.instructions = instructions
+        self._tool_prompt_text = json.dumps(
+            [
+                {
+                    "name": getattr(tool, "__name__", tool.__class__.__name__),
+                    "description": (getattr(tool, "__doc__", "") or "").strip(),
+                }
+                for tool in agent_tools
+            ],
+            ensure_ascii=False,
+        )
         self.agent = Agent(
             self.model,
             instructions=instructions,
@@ -1018,6 +1035,15 @@ class PydanticAgentRuntime:
         if len(transcript) <= max_chars:
             return transcript
         return "…" + transcript[-max_chars:]
+
+    def context_components(self, current_prompt: str = "") -> Dict[str, str]:
+        """Return prompt sections for model-aware context estimates."""
+        return {
+            "instructions": self.instructions,
+            "tool schemas": self._tool_prompt_text,
+            "history": self.model_adapter._messages_as_transcript(self._messages),
+            "current prompt": current_prompt,
+        }
 
     @property
     def available_tools(self) -> List[str]:

@@ -5,12 +5,11 @@ It runs GGUF models through llama.cpp and can use Groq, Gemini, or OpenRouter
 for a single API-backed session. Pydantic AI manages tool loops and tool
 validation.
 
-## Release 1.5 status
+## Release 1.5.1 status
 
-This release stabilizes current behavior before larger agent-workflow features.
-It documents supported commands and tools, keeps permissions explicit, and adds
-regression coverage around local models, APIs, web access, workspace files, and
-Docker isolation.
+This release adds model-aware context visibility on top of the stabilized 1.5
+base. OpenCLI now resolves model capability profiles, accounts for prompt
+components, tracks session usage, and shows context occupancy beside model name.
 
 Supported now:
 
@@ -24,7 +23,7 @@ Preview or incomplete:
 - `/paste` and `/multiline` toggle input mode; large-paste ergonomics are still experimental.
 - Model tool calling depends on selected local model. Enable `/tool-auto on` only for weaker models that need deterministic routing.
 - Docker commands require Docker Desktop running. OpenCLI does not install Docker or provide host-shell fallback.
-- MCP, plugins, subagents, plan mode, context compaction, and editor integration are not implemented in 1.5.
+- MCP, plugins, subagents, plan mode, context compaction, and editor integration are not implemented in 1.5.1.
 
 ## Install
 
@@ -52,6 +51,9 @@ set `OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT` to change it.
 |---|---|
 | `/help`, `/h` | Show built-in help. |
 | `/status` | Show loaded model, mode, tools, web, sandbox, and session state. |
+| `/context` | Show active profile, prompt breakdown, output reserve, and available input. |
+| `/usage` | Show input/output estimates or provider-reported usage for current session. |
+| `/prompt-size` | Show fixed instruction and tool-schema prompt cost. |
 | `/agent`, `/agent status` | Show agent runtime state. |
 | `/model` | Open local model picker. `/model <name>` loads built-in or saved profile. |
 | `/model-add`, `/modeladd` | Add a Hugging Face GGUF repo or existing local `.gguf` profile. |
@@ -117,6 +119,30 @@ internet access during Docker setup; sandboxed commands do not receive network.
 providers, permission gates, and session stores. Providers may differ, but CLI
 code uses those shared boundaries. New features should extend these contracts
 instead of binding UI code to a model vendor or tool implementation.
+
+## Model context profiles
+
+OpenCLI includes tested profiles for Ministral 3 14B, GPT-OSS 20B, Devstral
+Small 2 24B, and Qwen 3.8 27B. Unknown models use a conservative 16,384-token
+window and 2,048-token output reserve unless model metadata or workspace config
+provides explicit limits. Counts use loaded tokenizer when available; otherwise
+OpenCLI marks byte-based estimates with `~`.
+
+Workspace overrides live in `.opencli/config.toml`. This file is protected from
+agent file tools. Identifiers may be a built-in key, exact model ID, or
+`provider:model-id`:
+
+```toml
+[models."openrouter:anthropic/claude-example"]
+display_name = "Claude Example"
+context_window = 200000
+max_output_tokens = 8192
+supports_tools = true
+supports_vision = true
+supports_reasoning = true
+```
+
+Invalid overrides are ignored and reported by `/context`.
 
 ## Requirements
 

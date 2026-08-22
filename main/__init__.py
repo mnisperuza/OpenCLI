@@ -10,6 +10,7 @@ __all__ = [
     'get_interrupt_handler', 'PydanticAgentRuntime', 'get_agent_runtime',
     'ModelBackend', 'ModelDescriptor', 'PermissionGate',
     'PermissionRequestData', 'SessionStore', 'ToolDescriptor', 'ToolProvider',
+    'ModelCapabilityProfile', 'ModelProfileRegistry',
 ]
 
 
@@ -31,4 +32,7 @@ def __getattr__(name):
     }:
         from main import interfaces
         return getattr(interfaces, name)
+    if name in {"ModelCapabilityProfile", "ModelProfileRegistry"}:
+        from main import model_profiles
+        return getattr(model_profiles, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
