@@ -32,6 +32,23 @@ class WorkspaceToolSafetyTests(TestCase):
             self.assertEqual(result["chars"], 3)
             self.assertEqual(calls[-1][0], "file_write")
 
+    def test_denied_write_does_not_read_existing_content_for_diff(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "note.txt"
+            target.write_text("private", encoding="utf-8")
+            events = []
+            tools = LocalWorkspaceTools(
+                root,
+                RuntimeConfig(),
+                event_sink=events.append,
+                permission_callback=lambda *_request: False,
+            )
+            with patch.object(Path, "read_text", side_effect=AssertionError("unexpected read")):
+                result = tools.write_text_file("note.txt", "new")
+            self.assertTrue(result["permission_denied"])
+            self.assertFalse(any(event["type"] == "file_change" for event in events))
+
     def test_agent_cannot_read_or_write_protected_path(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -76,6 +93,26 @@ class WorkspaceToolSafetyTests(TestCase):
 
             self.assertTrue(result["dry_run"])
             self.assertEqual(target.read_text(encoding="utf-8"), "old")
+
+    def test_approved_edit_emits_bounded_file_diff(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "note.txt"
+            target.write_text("old\n", encoding="utf-8")
+            events = []
+            tools = LocalWorkspaceTools(
+                root,
+                RuntimeConfig(max_diff_chars=1_000),
+                event_sink=events.append,
+                permission_callback=lambda *_request: True,
+            )
+
+            tools.edit_text_file("note.txt", "old", "new")
+
+            change = next(event for event in events if event["type"] == "file_change")
+            self.assertEqual(change["details"]["path"], "note.txt")
+            self.assertIn("-old", change["details"]["diff"])
+            self.assertIn("+new", change["details"]["diff"])
 
 
 class ModelRegistryTests(TestCase):

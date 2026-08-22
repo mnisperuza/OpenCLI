@@ -16,6 +16,7 @@ Supported now:
 - Local GGUF inference through a local llama.cpp server.
 - Hosted chat and native tool calls through Groq, Gemini, and OpenRouter.
 - Permission-gated workspace files, web retrieval, session archives, and Docker commands.
+- Textual coding-agent workspace with live events, approvals, diffs, and manual plans.
 
 Preview or incomplete:
 
@@ -23,7 +24,7 @@ Preview or incomplete:
 - `/paste` and `/multiline` toggle input mode; large-paste ergonomics are still experimental.
 - Model tool calling depends on selected local model. Enable `/tool-auto on` only for weaker models that need deterministic routing.
 - Docker commands require Docker Desktop running. OpenCLI does not install Docker or provide host-shell fallback.
-- MCP, plugins, subagents, plan mode, context compaction, and editor integration are not implemented in 1.5.1.
+- MCP, plugins, subagents, agent-managed planning, context compaction, and editor integration are not implemented in 1.5.1.
 
 ## Install
 
@@ -44,6 +45,25 @@ python -m venv .venv
 `pyproject.toml` owns package metadata. `requirements.lock` records tested
 Python 3.12 runtime dependencies. llama.cpp startup waits up to 900 seconds;
 set `OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT` to change it.
+
+## Textual agent workspace
+
+Textual is the default interface:
+
+```bash
+opencli
+```
+
+Use `opencli --cli` for the classic line-oriented interface. The former
+`opencli --tui` flag remains accepted as a compatibility alias.
+
+The TUI streams model and tool events live, gates sensitive tools with approval
+modals, shows context and usage state, previews approved file diffs, switches
+saved models/API profiles, imports prior session memory explicitly, and stores a
+manual task plan outside the agent-writable workspace. Press `Enter` or click
+Send to submit; use `Shift+Enter` for a newline. `Ctrl+Enter` remains supported
+where the terminal distinguishes it. Use `Escape` to stop, `Ctrl+P` to add a
+plan step, `Ctrl+M` for models, and `Ctrl+R` for sessions.
 
 ## Commands
 

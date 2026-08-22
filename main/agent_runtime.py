@@ -8,6 +8,7 @@ exposes simple events so terminal rendering stays framework-independent.
 from __future__ import annotations
 
 import ast
+import difflib
 import fnmatch
 import hashlib
 import json
@@ -51,6 +52,7 @@ class RuntimeConfig:
     dry_run: bool = False
     max_file_chars: int = 40_000
     max_file_write_chars: int = 40_000
+    max_diff_chars: int = 20_000
     max_tool_results: int = 200
     max_web_results: int = 10
     max_web_content_chars: int = 20_000
@@ -184,6 +186,40 @@ class LocalWorkspaceTools:
             self.event_sink(
                 {"type": "tool_result", "name": name, "summary": summary}
             )
+
+    def _file_change(
+        self,
+        path: str,
+        before: str,
+        after: str,
+        action: str,
+        dry_run: bool = False,
+    ) -> None:
+        if not self.event_sink:
+            return
+        diff = "".join(
+            difflib.unified_diff(
+                before.splitlines(keepends=True),
+                after.splitlines(keepends=True),
+                fromfile=f"a/{path}",
+                tofile=f"b/{path}",
+            )
+        )
+        truncated = len(diff) > self.config.max_diff_chars
+        self.event_sink(
+            {
+                "type": "file_change",
+                "name": action,
+                "summary": path,
+                "details": {
+                    "path": path,
+                    "action": action,
+                    "diff": diff[: self.config.max_diff_chars],
+                    "truncated": truncated,
+                    "dry_run": dry_run,
+                },
+            }
+        )
 
     def _allowed(
         self, category: str, action: str, target: str, reason: str
@@ -359,10 +395,12 @@ class LocalWorkspaceTools:
             raise ValueError("Content exceeds configured write limit")
         if self.config.dry_run:
             self._result("write_text_file", f"dry-run: would write {len(content)} characters")
+            self._file_change(path, "", content, "write_text_file", dry_run=True)
             return {"path": path, "chars": len(content), "dry_run": True}
         if not self._allowed("file_write", "write_text_file", str(target), "Create or replace workspace file"):
             self._result("write_text_file", "permission denied")
             return {"path": path, "permission_denied": True}
+        before = target.read_text(encoding="utf-8", errors="replace") if target.is_file() else ""
         if expected_sha256 is not None:
             actual = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
             if actual != expected_sha256:
@@ -373,6 +411,7 @@ class LocalWorkspaceTools:
         temporary = target.with_name(target.name + ".opencli-tmp")
         temporary.write_text(content, encoding="utf-8")
         temporary.replace(target)
+        self._file_change(path, before, content, "write_text_file")
         result = {"path": str(target.relative_to(self.workspace)), "chars": len(content), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
         self._result("write_text_file", f"wrote {len(content)} characters")
         return result
@@ -397,6 +436,7 @@ class LocalWorkspaceTools:
             raise ValueError("Edited content exceeds configured write limit")
         if self.config.dry_run:
             self._result("edit_text_file", "dry-run: would edit one occurrence")
+            self._file_change(path, content, replacement, "edit_text_file", dry_run=True)
             return {"path": path, "replacements": 1, "dry_run": True}
         if not self._allowed("file_write", "edit_text_file", str(target), "Edit workspace file"):
             self._result("edit_text_file", "permission denied")
@@ -407,6 +447,7 @@ class LocalWorkspaceTools:
         temporary = target.with_name(target.name + ".opencli-tmp")
         temporary.write_text(replacement, encoding="utf-8")
         temporary.replace(target)
+        self._file_change(path, content, replacement, "edit_text_file")
         result = {"path": str(target.relative_to(self.workspace)), "replacements": 1, "sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest()}
         self._result("edit_text_file", "edited one occurrence")
         return result
@@ -1101,7 +1142,7 @@ class PydanticAgentRuntime:
         if event.get("type") == "tool_result":
             self._tool_results_this_run.append(dict(event))
         if self._state is None or event.get("type") not in {
-            "tool", "tool_call", "tool_result"
+            "tool", "tool_call", "tool_result", "file_change"
         }:
             return
         try:

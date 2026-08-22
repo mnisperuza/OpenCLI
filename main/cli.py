@@ -35,6 +35,7 @@ from main.sandbox import DockerSandbox
 from main.session_memory import SessionMemoryStore
 from main.context_accounting import ContextAccountingService, format_token_count
 from main.model_profiles import ModelProfileRegistry
+from main.ui_events import AgentEvent
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MODERN UI IMPORTS (Rich & Prompt Toolkit)
@@ -645,6 +646,7 @@ class OpenCLI:
         self.chat_session = None
         self._active_spinner_event = None
         self._active_spinner_thread = None
+        self.task_plan_context = ""
 
         # Modern UI State
         self.console = console
@@ -949,7 +951,13 @@ class OpenCLI:
 
     def _context_components(self, current_prompt: str = "") -> dict:
         if self.agent_runtime:
-            return self.agent_runtime.context_components(current_prompt)
+            components = self.agent_runtime.context_components(current_prompt)
+            if (
+                self.task_plan_context
+                and "USER-MAINTAINED TASK PLAN" not in current_prompt
+            ):
+                components["task plan"] = self.task_plan_context
+            return components
         tools = "\n".join(
             [
                 "list_files", "read_text_file", "search_text", "file_info",
@@ -958,7 +966,7 @@ class OpenCLI:
             ]
             if self.tools_enabled else []
         )
-        return {
+        components = {
             "instructions": (
                 "OpenCLI workspace assistant. Use approved tools for workspace "
                 "evidence and changes. Never invent tool results."
@@ -967,6 +975,12 @@ class OpenCLI:
             "history": "",
             "current prompt": current_prompt,
         }
+        if (
+            self.task_plan_context
+            and "USER-MAINTAINED TASK PLAN" not in current_prompt
+        ):
+            components["task plan"] = self.task_plan_context
+        return components
 
     def _context_snapshot(self, current_prompt: str = ""):
         self._refresh_context_profile()
@@ -1094,8 +1108,8 @@ class OpenCLI:
                 state = "Disponible"
             table.add_row(title, vram, note, f"[{style}]{state}[/{style}]", style=style)
 
-        panel_title = f"[bold white]Agent Model Router[/bold white]"
-        subtitle = f"[dim]Use /model manual to choose or /model auto to return to auto[/dim]"
+        panel_title = "[bold white]Agent Model Router[/bold white]"
+        subtitle = "[dim]Use /model manual to choose or /model auto to return to auto[/dim]"
         self.console.print(Panel(table, title=panel_title, subtitle=subtitle, border_style="#777777", box=box.ROUNDED, padding=(1, 1)))
 
     def open_model_menu(self, manual: bool = False):
@@ -1753,10 +1767,16 @@ class OpenCLI:
             selected = quant_map.get(choice, "int4")
             print(f"\n  Selected {selected.upper()}")
             return selected
-        except:
+        except (EOFError, KeyboardInterrupt):
             return "int4"
 
-    def load_model(self, mode: str, quant: str = None, show_picker: bool = True):
+    def load_model(
+        self,
+        mode: str,
+        quant: str = None,
+        show_picker: bool = True,
+        render: bool = True,
+    ):
         """Load model with one muted progress indicator."""
         if not self.ensure_engine():
             return False
@@ -1798,30 +1818,35 @@ class OpenCLI:
         if quant == "api":
             quant = "int4"
 
-        print()
+        if render:
+            print()
         stop_event = threading.Event()
-
-        thread = threading.Thread(
-            target=loading_spinner,
-            args=(f"Loading {name}... This might take several minutes", family, stop_event)
-        )
-        thread.daemon = True
-        thread.start()
+        thread = None
+        if render:
+            thread = threading.Thread(
+                target=loading_spinner,
+                args=(f"Loading {name}... This might take several minutes", family, stop_event)
+            )
+            thread.daemon = True
+            thread.start()
 
         success, message = self.engine.load_model(mode, quant)
 
         stop_event.set()
-        thread.join(timeout=1.0)
+        if thread is not None:
+            thread.join(timeout=1.0)
 
         if success:
             self.mode = mode
             self.quant = quant
             self.server_stopped_by_user = False
-            print()
-            print(f"{Colors.DIM}{name} ready.{Colors.RESET}\n")
+            if render:
+                print()
+                print(f"{Colors.DIM}{name} ready.{Colors.RESET}\n")
             return True
         else:
-            print(f"\nError: {message}\n")
+            if render:
+                print(f"\nError: {message}\n")
             return False
 
     def init_engine(self):
@@ -2024,67 +2049,59 @@ class OpenCLI:
         print(f"  Auto route: {'on' if self.auto_tool_routing else 'off'}")
         print()
 
-    def query(self, user_input: str, think_mode: bool = False):
-        """Send query to model"""
-
+    def stream_turn(self, user_input: str, think_mode: bool = False):
+        """Run one turn and yield UI-neutral events."""
         if self.server_stopped_by_user:
-            if not self.confirm_server_restart():
-                print(f"{Colors.YELLOW}Server remains stopped. Query cancelled.{Colors.RESET}\n")
-                return
-            self.server_stopped_by_user = False
-
-        if not self.ensure_engine() or not self.engine.model:
-            print(
-                f"\n{Colors.YELLOW}No model loaded. Starting llama.cpp and "
-                f"loading Auto…{Colors.RESET}"
+            yield AgentEvent(
+                "error",
+                "llama.cpp server is stopped. Use /model auto to restart it.",
             )
-            if not self.load_model(self.auto_model_key, "int4", show_picker=False):
+            return
+
+        if not self.ensure_engine():
+            yield AgentEvent("error", "Model engine is unavailable.")
+            return
+        if not self.engine.model:
+            yield AgentEvent("status", "Loading Auto model…")
+            if not self.load_model(
+                self.auto_model_key,
+                "int4",
+                show_picker=False,
+                render=False,
+            ):
+                yield AgentEvent("error", "Auto model failed to load.")
                 return
 
         engine_info = self.engine.MODELS.get(self.mode, {})
-        family = engine_info.get("family", self.MODELS["auto"][2])
-        has_thinking = engine_info.get("has_thinking", False)
-
-        if think_mode and not has_thinking:
-            print(f"\n{Colors.YELLOW}Thinking mode is not available for the current profile.{Colors.RESET}\n")
+        if think_mode and not engine_info.get("has_thinking", False):
+            yield AgentEvent(
+                "error",
+                "Thinking mode is unavailable for the current profile.",
+            )
             return
 
-        payload = self.engine.prepare_input_payload(user_input)
-
-        if payload.file_paths:
-            for path in payload.file_paths:
-                print(f"{Colors.DIM}Found: {path.name}{Colors.RESET}")
-            print()
-
+        model_input = user_input
+        if self.task_plan_context:
+            model_input = (
+                f"{user_input}\n\nUSER-MAINTAINED TASK PLAN (context only; do not edit):\n"
+                f"{self.task_plan_context}"
+            )
+        payload = self.engine.prepare_input_payload(model_input)
+        for path in payload.file_paths:
+            yield AgentEvent("status", f"Attached file: {path.name}")
         if payload.clipboard_image_used:
-            print(f"{Colors.DIM}Using image from Windows clipboard{Colors.RESET}\n")
-
+            yield AgentEvent("status", "Using image from Windows clipboard")
         if not payload.image_attachments and not self.ensure_agent_runtime():
+            yield AgentEvent("error", "Agent runtime is unavailable.")
             return
 
-        self.interrupt_handler.reset()
-
+        if self.interrupt_handler is not None:
+            self.interrupt_handler.reset()
         response_content = ""
-        response_tokens = 0
-        reported_input_tokens = None
-        reported_output_tokens = None
+        reported_input = None
+        reported_output = None
         turn_started = False
         turn_snapshot = self._context_snapshot(payload.enhanced_prompt)
-        thinking_shown = False
-        markdown_renderer = StreamingMarkdownRenderer(self.console)
-
-        stop_spinner_event = threading.Event()
-        spinner_thread = threading.Thread(
-            target=loading_spinner,
-            args=("Thinking...", family, stop_spinner_event, 0.08),
-        )
-        spinner_thread.daemon = True
-        spinner_thread.start()
-        self._active_spinner_event = stop_spinner_event
-        self._active_spinner_thread = spinner_thread
-        escape_watcher = EscapeInterruptWatcher(self._interrupt_from_escape)
-        escape_watcher.start()
-
         try:
             stream = (
                 self.engine.generate_stream(payload)
@@ -2093,143 +2110,101 @@ class OpenCLI:
             )
             turn_started = True
             for chunk in stream:
-                chunk_type = chunk.get("type", "")
-                content = chunk.get("content", "")
-
-                if chunk_type == "thinking":
+                event = AgentEvent.from_chunk(chunk)
+                if event.type == "thinking":
                     continue
-
-                elif chunk_type == "token":
-                    if content.strip() in ['assistant', 'user', 'system']:
+                if event.type == "token":
+                    if event.content.strip() in {"assistant", "user", "system"}:
                         continue
-
-                    if not thinking_shown:
-                        thinking_shown = True
-                        stop_spinner_event.set()
-                        spinner_thread.join(timeout=0.5)
-                        sys.stdout.write(Colors.CLEAR_LINE)
-                        sys.stdout.write(f"{Colors.ASSISTANT}OpenCLI: {Colors.RESET}")
-                        sys.stdout.flush()
-
-                    markdown_renderer.append(content)
-
-                    response_content += content
-                    response_tokens += 1
-
-                elif chunk_type == "status":
-                    if not thinking_shown:
-                        stop_spinner_event.set()
-                        spinner_thread.join(timeout=0.5)
-                        print()
-                    print(f"\n{Colors.DIM}{content}{Colors.RESET}", flush=True)
-
-                elif chunk_type == "tool":
-                    self._stop_active_spinner()
-                    name = chunk.get("name", "tool")
-                    arguments = chunk.get("arguments", {})
-                    target = (
-                        arguments.get("query")
-                        or arguments.get("path")
-                        or arguments.get("url")
-                        or ""
-                    )
-                    print(
-                        f"\n{Colors.DIM}Tool: {name}"
-                        f"{f' ({target})' if target else ''}{Colors.RESET}"
-                    )
-
-                elif chunk_type == "tool_result":
-                    self._stop_active_spinner()
-                    print(
-                        f"{Colors.DIM}Result: {chunk.get('name', 'tool')} — "
-                        f"{chunk.get('summary', 'complete')}{Colors.RESET}"
-                    )
-
-                elif chunk_type == "done":
-                    stop_spinner_event.set()
-                    spinner_thread.join(timeout=0.5)
-                    markdown_renderer.flush(force=True)
-                    print(Colors.RESET)
-
-                    if isinstance(chunk.get("input_tokens"), int):
-                        reported_input_tokens = chunk["input_tokens"]
-                    if isinstance(chunk.get("output_tokens"), int):
-                        reported_output_tokens = chunk["output_tokens"]
-                    estimated_output, _ = self.context_accounting.count_text(
-                        response_content
-                    )
-                    shown_output = (
-                        reported_output_tokens
-                        if isinstance(reported_output_tokens, int)
-                        else estimated_output
-                    )
-                    marker = "" if isinstance(reported_output_tokens, int) else "~"
-                    print(
-                        f"\n{Colors.DIM}─── {marker}{shown_output} tokens "
-                        f"───{Colors.RESET}"
-                    )
-
-                elif chunk_type == "usage":
-                    if isinstance(chunk.get("input_tokens"), int):
-                        reported_input_tokens = (
-                            (reported_input_tokens or 0) + chunk["input_tokens"]
-                        )
-                    if isinstance(chunk.get("output_tokens"), int):
-                        reported_output_tokens = (
-                            (reported_output_tokens or 0) + chunk["output_tokens"]
-                        )
-
-                elif chunk_type == "error":
-                    stop_spinner_event.set()
-                    spinner_thread.join(timeout=0.5)
-                    print(f"{Colors.RESET}\n{Colors.RED}Error: {content}{Colors.RESET}")
-
+                    response_content += event.content
+                elif event.type in {"done", "usage"}:
+                    if event.input_tokens is not None:
+                        reported_input = (reported_input or 0) + event.input_tokens
+                    if event.output_tokens is not None:
+                        reported_output = (reported_output or 0) + event.output_tokens
+                yield event
         except KeyboardInterrupt:
             self._request_generation_stop()
-            stop_spinner_event.set()
-            spinner_thread.join(timeout=0.5)
-            markdown_renderer.flush(force=True)
-            print(Colors.RESET)
-
-            if response_content:
-                stopped_tokens, _ = self.context_accounting.count_text(response_content)
-                print(f"\n{Colors.DIM}─── ~{stopped_tokens} tokens (stopped) ───{Colors.RESET}")
-            else:
-                print(f"\n{Colors.DIM}[Interrupted before any output]{Colors.RESET}")
-
-        except Exception as e:
-            stop_spinner_event.set()
-            spinner_thread.join(timeout=0.5)
-            print(f"{Colors.RESET}\n{Colors.RED}Error: {e}{Colors.RESET}")
+            yield AgentEvent("status", "Generation stopped by user.")
+        except Exception as error:
+            yield AgentEvent("error", str(error))
             if self.debug:
                 import traceback
                 traceback.print_exc()
+        finally:
+            if turn_started:
+                output_estimate, output_is_estimated = self.context_accounting.count_text(
+                    response_content
+                )
+                exact_usage = reported_input is not None and reported_output is not None
+                self.context_accounting.record_turn(
+                    reported_input if exact_usage else turn_snapshot.used_tokens,
+                    reported_output if exact_usage else output_estimate,
+                    estimated=(
+                        not exact_usage
+                        or turn_snapshot.estimated
+                        or output_is_estimated
+                    ),
+                )
+            self._save_chat_session()
 
-        if turn_started:
-            output_estimate, output_is_estimated = self.context_accounting.count_text(
-                response_content
+    def query(self, user_input: str, think_mode: bool = False):
+        """Render shared agent events in the classic terminal interface."""
+        if self.server_stopped_by_user:
+            if not self.confirm_server_restart():
+                print(
+                    f"{Colors.YELLOW}Server remains stopped. "
+                    f"Query cancelled.{Colors.RESET}\n"
+                )
+                return
+            self.server_stopped_by_user = False
+        turns_before = self.context_accounting.usage.turns
+        renderer = StreamingMarkdownRenderer(self.console)
+        response_started = False
+        escape_watcher = EscapeInterruptWatcher(self._interrupt_from_escape)
+        escape_watcher.start()
+        try:
+            for event in self.stream_turn(user_input, think_mode=think_mode):
+                if event.type == "token":
+                    if not response_started:
+                        response_started = True
+                        sys.stdout.write(f"{Colors.ASSISTANT}OpenCLI: {Colors.RESET}")
+                    renderer.append(event.content)
+                elif event.type == "status":
+                    print(f"\n{Colors.DIM}{event.content}{Colors.RESET}")
+                elif event.type == "tool":
+                    target = (
+                        event.arguments.get("query")
+                        or event.arguments.get("path")
+                        or event.arguments.get("url")
+                        or ""
+                    )
+                    print(
+                        f"\n{Colors.DIM}Tool: {event.name}"
+                        f"{f' ({target})' if target else ''}{Colors.RESET}"
+                    )
+                elif event.type == "tool_result":
+                    print(
+                        f"{Colors.DIM}Result: {event.name} — "
+                        f"{event.summary or 'complete'}{Colors.RESET}"
+                    )
+                elif event.type == "file_change":
+                    marker = "dry-run " if event.details.get("dry_run") else ""
+                    print(f"{Colors.DIM}{marker}Changed: {event.summary}{Colors.RESET}")
+                elif event.type == "error":
+                    print(f"\n{Colors.RED}Error: {event.content}{Colors.RESET}")
+        finally:
+            escape_watcher.stop()
+            renderer.flush(force=True)
+            self._stop_active_spinner()
+            print(Colors.RESET)
+        usage = self.context_accounting.usage
+        if usage.turns > turns_before:
+            marker = "~" if usage.estimated_turns else ""
+            print(
+                f"\n{Colors.DIM}─── {marker}{usage.last_output_tokens} tokens "
+                f"───{Colors.RESET}"
             )
-            has_reported_usage = (
-                isinstance(reported_input_tokens, int)
-                and reported_input_tokens >= 0
-                and isinstance(reported_output_tokens, int)
-                and reported_output_tokens >= 0
-            )
-            self.context_accounting.record_turn(
-                reported_input_tokens if has_reported_usage else turn_snapshot.used_tokens,
-                reported_output_tokens if has_reported_usage else output_estimate,
-                estimated=(
-                    not has_reported_usage
-                    or turn_snapshot.estimated
-                    or output_is_estimated
-                ),
-            )
-
-        escape_watcher.stop()
-        self._stop_active_spinner()
-        self._active_spinner_event = None
-        self._active_spinner_thread = None
-        self._save_chat_session()
 
     def run(self, api_start: bool = False):
         """Main CLI loop with styled input"""
@@ -2295,6 +2270,16 @@ class OpenCLI:
                 print(f"\n\n{Colors.DIM}Goodbye{Colors.RESET}\n")
                 break
 
+    def run_tui(self, api_start: bool = False):
+        """Run optional Textual agent workspace without changing the default REPL."""
+        try:
+            from main.tui import OpenCLITui
+        except ImportError as error:
+            print(f"Textual UI unavailable: {error}")
+            return
+
+        OpenCLITui(self, api_start=api_start).run()
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MAIN
@@ -2336,6 +2321,16 @@ def main():
         choices=["start"],
         help="Start the saved API provider/model profile; API key is read from its environment variable or requested privately.",
     )
+    parser.add_argument(
+        "--tui",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--cli",
+        action="store_true",
+        help="Open classic line-oriented CLI instead of Textual workspace.",
+    )
     args, _ = parser.parse_known_args()
 
     if args.hf_token:
@@ -2351,7 +2346,10 @@ def main():
     cli = OpenCLI(dry_run=args.dry_run, initial_model=args.model)
     if args.model and args.model not in cli.MODELS and args.model not in cli.router_models():
         parser.error(f"unknown model: {args.model}")
-    cli.run(api_start=args.api == "start")
+    if args.cli:
+        cli.run(api_start=args.api == "start")
+    else:
+        cli.run_tui(api_start=args.api == "start")
 
 
 if __name__ == "__main__":
