@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -31,8 +32,8 @@ class ModelProfileTests(TestCase):
             profile = ModelProfileRegistry(Path(directory)).resolve(
                 key="unknown", model_id="vendor/new-model", backend="remote_api"
             )
-        self.assertEqual(profile.context_window, 16384)
-        self.assertEqual(profile.max_output_tokens, 2048)
+        self.assertEqual(profile.context_window, 32768)
+        self.assertEqual(profile.max_output_tokens, 4096)
         self.assertFalse(profile.supports_tools)
         self.assertEqual(profile.source, "conservative fallback")
 
@@ -67,8 +68,33 @@ class ContextAccountingTests(TestCase):
         self.assertEqual(snapshot.components["instructions"], 1)
         self.assertEqual(snapshot.components["history"], 2)
         self.assertEqual(snapshot.used_tokens, 3)
-        self.assertEqual(snapshot.output_reserve, 2048)
+        self.assertEqual(snapshot.output_reserve, 4096)
         self.assertTrue(snapshot.estimated)
+
+    def test_oversized_output_capability_cannot_consume_clean_input_budget(self):
+        profile = replace(
+            FALLBACK_PROFILE,
+            context_window=32768,
+            max_output_tokens=32767,
+        )
+        snapshot = ContextAccountingService(profile).snapshot(
+            {"instructions": "short", "current prompt": "hello"}
+        )
+
+        self.assertEqual(snapshot.output_reserve, 16384)
+        self.assertGreater(snapshot.available_tokens, 16000)
+
+    def test_local_metadata_caps_output_to_half_context(self):
+        with TemporaryDirectory() as directory:
+            profile = ModelProfileRegistry(Path(directory)).resolve(
+                key="custom",
+                model_id="vendor/custom-gguf",
+                backend="llama_cpp",
+                metadata={"context": 32768, "max_tokens": 32767},
+            )
+
+        self.assertEqual(profile.context_window, 32768)
+        self.assertEqual(profile.max_output_tokens, 16384)
 
     def test_tokenizer_and_session_usage_are_exact_when_reported(self):
         service = ContextAccountingService(FALLBACK_PROFILE, tokenizer=len)

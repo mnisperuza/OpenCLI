@@ -114,7 +114,7 @@ class ModelRegistry:
 
         context_size = int(self._number(context, "Context", 512, 1_000_000))
         output_tokens = int(
-            self._number(max_tokens, "Max output tokens", 64, context_size - 1)
+            self._number(max_tokens, "Max output tokens", 64, context_size // 2)
         )
         temp = self._number(temperature, "Temperature", 0.0, 2.0)
         self._models[key] = {

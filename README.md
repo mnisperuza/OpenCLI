@@ -5,18 +5,24 @@ It runs GGUF models through llama.cpp and can use Groq, Gemini, or OpenRouter
 for a single API-backed session. Pydantic AI manages tool loops and tool
 validation.
 
-## Release 1.5.1 status
+## Release 1.5.2 status
 
-This release adds model-aware context visibility on top of the stabilized 1.5
-base. OpenCLI now resolves model capability profiles, accounts for prompt
-components, tracks session usage, and shows context occupancy beside model name.
+This release stabilizes the model-aware context and Textual agent workspace on
+top of the 1.5 base. OpenCLI now resolves model capability profiles, accounts
+for prompt components, tracks session usage, and shows context occupancy beside
+model name.
 
 Supported now:
 
 - Local GGUF inference through a local llama.cpp server.
 - Hosted chat and native tool calls through Groq, Gemini, and OpenRouter.
 - Permission-gated workspace files, web retrieval, session archives, and Docker commands.
-- Textual coding-agent workspace with live events, approvals, diffs, and manual plans.
+- Textual coding-agent workspace with live events, approvals, diffs, and task plans.
+- Per-turn English/Spanish response-language guard; ambiguous technical prompts use English.
+- Two-level context control: consumed tool-result pruning plus loaded-model structured summaries with a retained hot window.
+- Bounded, syntax-safe diff previews with added/removed line highlighting.
+- Session titles, full-session resume, and non-stacking compact memory import.
+- Model-visible task-plan status updates for completed and dismissed items.
 
 Preview or incomplete:
 
@@ -24,7 +30,7 @@ Preview or incomplete:
 - `/paste` and `/multiline` toggle input mode; large-paste ergonomics are still experimental.
 - Model tool calling depends on selected local model. Enable `/tool-auto on` only for weaker models that need deterministic routing.
 - Docker commands require Docker Desktop running. OpenCLI does not install Docker or provide host-shell fallback.
-- MCP, plugins, subagents, agent-managed planning, context compaction, and editor integration are not implemented in 1.5.1.
+- MCP, plugins, subagents, agent-created detailed plans, and editor integration are not implemented in 1.5.2.
 
 ## Install
 
@@ -59,11 +65,21 @@ Use `opencli --cli` for the classic line-oriented interface. The former
 
 The TUI streams model and tool events live, gates sensitive tools with approval
 modals, shows context and usage state, previews approved file diffs, switches
-saved models/API profiles, imports prior session memory explicitly, and stores a
-manual task plan outside the agent-writable workspace. Press `Enter` or click
+saved models/API profiles, adds/removes GGUF and API profiles, discovers hosted
+model limits, imports prior session memory explicitly, and stores a task plan
+outside the agent-writable workspace. The agent can inspect and mark existing
+steps `completed` or `dismissed` when evidence supports it; it cannot create or
+edit plan steps. Press `Enter` or click
 Send to submit; use `Shift+Enter` for a newline. `Ctrl+Enter` remains supported
 where the terminal distinguishes it. Use `Escape` to stop, `Ctrl+P` to add a
-plan step, `Ctrl+M` for models, and `Ctrl+R` for sessions.
+plan step, `Ctrl+M` for models, `Ctrl+R` for sessions, and `Ctrl+K` or Compact
+button to shorten old history.
+
+Sessions have stable timestamp/UUID filenames and optional human-readable titles.
+The model may propose one short title through a validated tool; use
+`/session-name TEXT` to set or replace it. In Sessions, choose **Resume full
+session** to reopen retained runtime history, or **Import compact memory** to
+replace one bounded historical capsule in current chat.
 
 ## Commands
 
@@ -74,6 +90,8 @@ plan step, `Ctrl+M` for models, and `Ctrl+R` for sessions.
 | `/context` | Show active profile, prompt breakdown, output reserve, and available input. |
 | `/usage` | Show input/output estimates or provider-reported usage for current session. |
 | `/prompt-size` | Show fixed instruction and tool-schema prompt cost. |
+| `/compact`, `/compact status` | Micro-prune tool results, summarize cold history with the loaded model, and retain recent complete turns. |
+| `/compact auto on|off` | Toggle context-aware compaction before a request; default on. |
 | `/agent`, `/agent status` | Show agent runtime state. |
 | `/model` | Open local model picker. `/model <name>` loads built-in or saved profile. |
 | `/model-add`, `/modeladd` | Add a Hugging Face GGUF repo or existing local `.gguf` profile. |
@@ -92,8 +110,10 @@ plan step, `Ctrl+M` for models, and `Ctrl+R` for sessions.
 | `/permissions`, `/permissions reset` | Show or reset workspace permissions. |
 | `/history` | Show recent agent history. |
 | `/new`, `/newchat` | Start clean session. |
-| `/memory`, `/mem` | Select one prior workspace archive to load as untrusted context. |
-| `/memory clear` | Clear active runtime conversation. |
+| `/session-name TEXT` | Set or replace active session title. |
+| `/memory`, `/mem` | Select one prior archive to replace current imported memory capsule. |
+| `/memory clear` | Clear active runtime conversation while keeping durable user notes. |
+| `/memory notes`, `/memory forget`, `/memory list` | Review, remove, or list durable memory and workspace archives. |
 | `/memory current` | Show active archive path. |
 | `/remember TEXT` | Save user-controlled session note. |
 | `/paste`, `/multiline` | Toggle experimental multiline input. |
@@ -119,6 +139,19 @@ to transmit prompt, conversation context, tool schemas, and tool results.
 Sessions save under `~/.opencli/sessions/`, scoped by workspace. Loaded session
 archives remain untrusted historical text, never executable instructions.
 
+Large tool results are pruned after the model consumes them; bounded payload
+copies move to the local Markdown tool archive and stay outside future model context. A turn
+can fetch at most three pages, each bounded to 8,000 characters. `/compact` uses
+the currently loaded local or API model, without tools or active chat history,
+to create a structured memory. Recent complete turns remain verbatim. If model
+summarization fails, OpenCLI uses a deterministic excerpt. Automatic compaction
+runs near 80% context occupancy and reserves space for tool observations.
+`/remember` notes remain after `/memory clear` until `/memory forget`.
+
+Hosted output is bounded twice: provider `max_tokens` plus an independent stream
+character cap. The TUI batches streaming updates and caps rendered Markdown to
+prevent oversized responses from exhausting UI memory.
+
 ## Docker sandbox
 
 Install and start Docker Desktop, then run:
@@ -143,10 +176,15 @@ instead of binding UI code to a model vendor or tool implementation.
 ## Model context profiles
 
 OpenCLI includes tested profiles for Ministral 3 14B, GPT-OSS 20B, Devstral
-Small 2 24B, and Qwen 3.8 27B. Unknown models use a conservative 16,384-token
-window and 2,048-token output reserve unless model metadata or workspace config
-provides explicit limits. Counts use loaded tokenizer when available; otherwise
-OpenCLI marks byte-based estimates with `~`.
+Small 2 24B, and Qwen 3.8 27B. Unknown models use a 32,768-token window and
+4,096-token output reserve unless model metadata, saved API profile, or workspace
+config provides explicit limits. API discovery recognizes common flat, nested,
+and camel-case provider limit fields. Reconnecting a saved TUI API profile
+refreshes missing metadata and persists discovered limits. The TUI API form
+exposes both values when a provider omits metadata. Output reserve is capped at
+half the context window so a malformed profile cannot consume all input space.
+Counts use the loaded tokenizer when available; otherwise OpenCLI marks
+byte-based estimates with `~`.
 
 Workspace overrides live in `.opencli/config.toml`. This file is protected from
 agent file tools. Identifiers may be a built-in key, exact model ID, or

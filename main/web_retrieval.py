@@ -91,15 +91,21 @@ class WebRetriever:
         self,
         max_results: int = 10,
         max_content_chars: int = 20_000,
+        max_fetches_per_turn: int = 3,
         event_sink: Optional[EventSink] = None,
         client_factory: Optional[Callable[[], Any]] = None,
         permission_callback: Optional[PermissionCallback] = None,
     ):
         self.max_results = max(1, max_results)
         self.max_content_chars = max(1_000, max_content_chars)
+        self.max_fetches_per_turn = max(1, int(max_fetches_per_turn))
+        self._fetches_this_turn = 0
         self.event_sink = event_sink
         self._client_factory = client_factory
         self.permission_callback = permission_callback
+
+    def begin_turn(self) -> None:
+        self._fetches_this_turn = 0
 
     def _client(self) -> Any:
         if self._client_factory is not None:
@@ -206,6 +212,18 @@ class WebRetriever:
         canonical = _canonical_url(url)
         if not canonical:
             raise ValueError("URL must be a public HTTP or HTTPS destination")
+        if self._fetches_this_turn >= self.max_fetches_per_turn:
+            output = {
+                "url": canonical,
+                "content": "",
+                "error": (
+                    "Per-turn web fetch limit reached; use existing evidence or "
+                    "continue research in next turn."
+                ),
+                "recoverable": True,
+            }
+            self._result("web_fetch", output["error"])
+            return output
         if not self._allowed(
             "web_fetch", canonical, "Read source content for grounded answer"
         ):
@@ -213,6 +231,7 @@ class WebRetriever:
             return {"url": canonical, "permission_denied": True, "content": ""}
         if not _is_public_web_url(canonical):
             raise ValueError("URL must be a public HTTP or HTTPS destination")
+        self._fetches_this_turn += 1
         self._event("web_fetch", {"url": canonical})
         extracted = None
         error_text = ""

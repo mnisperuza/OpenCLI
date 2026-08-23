@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from typing import TYPE_CHECKING
 
 from textual import work
@@ -22,6 +23,7 @@ from textual.widgets import (
     Markdown, OptionList, RichLog, Static, TextArea,
 )
 from textual.widgets.option_list import Option
+from rich.text import Text
 
 from main.permissions import PermissionDecision, PermissionRequest
 from main.task_plan import PLAN_STATUSES, TaskPlanItem, TaskPlanStore
@@ -165,6 +167,61 @@ class ChoiceScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ConfirmScreen(ModalScreen[bool]):
+    def __init__(self, title: str, message: str) -> None:
+        super().__init__()
+        self.dialog_title = title
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm-dialog"):
+            yield Label(self.dialog_title, classes="dialog-title")
+            yield Static(self.message)
+            with Horizontal(classes="dialog-actions"):
+                yield Button("Confirm", id="confirm", variant="error")
+                yield Button("Cancel", id="cancel")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm")
+
+
+class FormScreen(ModalScreen[dict[str, str] | None]):
+    """Small reusable Textual form; validation remains in domain registries."""
+
+    def __init__(
+        self,
+        title: str,
+        fields: list[tuple[str, str, str, bool]],
+    ) -> None:
+        super().__init__()
+        self.dialog_title = title
+        self.fields = fields
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="form-dialog"):
+            yield Label(self.dialog_title, classes="dialog-title")
+            for name, label, default, password in self.fields:
+                yield Label(label, classes="form-label")
+                yield Input(value=default, password=password, id=f"form-{name}")
+            with Horizontal(classes="dialog-actions"):
+                yield Button("Save", id="save", variant="primary")
+                yield Button("Cancel", id="cancel")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id != "save":
+            self.dismiss(None)
+            return
+        self.dismiss(
+            {
+                name: self.query_one(f"#form-{name}", Input).value.strip()
+                for name, *_ in self.fields
+            }
+        )
+
+
 class PromptTextArea(TextArea):
     """Multiline editor with reliable agent-style submit keys."""
 
@@ -185,6 +242,7 @@ class PromptTextArea(TextArea):
 class OpenCLITui(App[None]):
     TITLE = "OpenCLI"
     SUB_TITLE = "Agent workspace"
+    MAX_RENDERED_RESPONSE_CHARS = 96_000
     CSS = """
     Screen { background: #0d1113; color: #d5dcda; }
     #status-line { height: 3; padding: 1 2; background: #151c1e; color: #b9d8c2; }
@@ -208,10 +266,12 @@ class OpenCLITui(App[None]):
     #prompt { width: 1fr; }
     #send-button { width: 12; height: 5; margin: 1 1 0 0; }
     ModalScreen { align: center middle; background: rgba(0, 0, 0, 0.65); }
-    #permission-dialog, #text-dialog, #choice-dialog {
+    #permission-dialog, #text-dialog, #choice-dialog, #confirm-dialog, #form-dialog {
         width: 72; max-width: 92%; height: auto; max-height: 85%;
         border: round #6b9785; background: #151c1e; padding: 1 2;
     }
+    #form-dialog { width: 80; height: 90%; }
+    .form-label { color: #aeb8b6; margin-top: 1; }
     #permission-details { height: auto; }
     #choice-list { height: 18; }
     .dialog-actions { height: 3; align-horizontal: right; margin-top: 1; }
@@ -223,7 +283,8 @@ class OpenCLITui(App[None]):
         ("ctrl+d", "cycle_plan", "Plan status"), ("ctrl+e", "edit_plan", "Edit plan"),
         ("delete", "delete_plan", "Delete plan"), ("alt+up", "plan_up", "Plan up"),
         ("alt+down", "plan_down", "Plan down"), ("ctrl+m", "models", "Models"),
-        ("ctrl+r", "sessions", "Sessions"), ("ctrl+q", "quit", "Quit"),
+        ("ctrl+r", "sessions", "Sessions"), ("ctrl+k", "compact", "Compact"),
+        ("ctrl+q", "quit", "Quit"),
     ]
 
     def __init__(
@@ -239,10 +300,13 @@ class OpenCLITui(App[None]):
         self._busy = False
         self._assistant: Markdown | None = None
         self._assistant_text = ""
+        self._response_render_truncated = False
         self._events: list[AgentEvent] = []
         self.permission_broker = TextualPermissionBroker(self)
         self.plan_store: TaskPlanStore | None = None
         self.plan_items: list[TaskPlanItem] = []
+        self._pending_api_client = None
+        self._pending_api_key = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -261,6 +325,7 @@ class OpenCLITui(App[None]):
         with Horizontal(id="toolbar"):
             yield Button("Models", id="models-button")
             yield Button("Sessions", id="sessions-button")
+            yield Button("Compact", id="compact-button")
             yield Button("Add plan", id="plan-button")
             yield Button("Clear", id="clear-button")
         with Horizontal(id="composer"):
@@ -274,7 +339,10 @@ class OpenCLITui(App[None]):
         self.plan_store = TaskPlanStore(
             Path.cwd(), self.cli.chat_session.session_id, root=self.state_root
         )
+        self.cli.task_plan_store = self.plan_store
         self.plan_items = self.plan_store.load()
+        if self.cli.agent_runtime is not None:
+            self.cli.agent_runtime.task_plan_store = self.plan_store
         self._sync_plan_context()
         self.cli.permission_manager.approval_callback = self.permission_broker.request
         self._mount_message(
@@ -308,8 +376,20 @@ class OpenCLITui(App[None]):
         if message.lower() in {"/model", "/models"}:
             self.action_models()
             return
-        if message.lower() in {"/api", "/api-md"}:
+        if message.lower() in {"/model-add", "/modeladd"}:
+            self.action_add_model()
+            return
+        if message.lower() in {"/model-rm", "/modelrm"}:
+            self.action_remove_model()
+            return
+        if message.lower() == "/api":
+            self.action_add_api()
+            return
+        if message.lower() == "/api-md":
             self.action_models()
+            return
+        if message.lower() == "/api-del":
+            self.action_remove_api()
             return
         if message.lower() in {"/sessions", "/memory"}:
             self.action_sessions()
@@ -325,12 +405,17 @@ class OpenCLITui(App[None]):
             "send-button": self.action_submit,
             "models-button": self.action_models,
             "sessions-button": self.action_sessions,
+            "compact-button": self.action_compact,
             "plan-button": self.action_add_plan,
             "clear-button": self.action_clear_timeline,
         }
         action = actions.get(event.button.id or "")
         if action:
             action()
+
+    def action_compact(self) -> None:
+        if not self._busy:
+            self._run_message("/compact")
 
     def action_clear_timeline(self) -> None:
         self.query_one("#timeline", VerticalScroll).remove_children()
@@ -409,7 +494,12 @@ class OpenCLITui(App[None]):
         self._refresh_plan(selected if selected is not None and selected >= 0 else None)
 
     def action_models(self) -> None:
-        choices: list[tuple[str, str]] = []
+        choices: list[tuple[str, str]] = [
+            ("manage::add-model", "+ Add local/Hugging Face GGUF profile"),
+            ("manage::remove-model", "- Remove GGUF profile"),
+            ("manage::add-api", "+ Add/connect API profile"),
+            ("manage::remove-api", "- Remove API profile"),
+        ]
         for key, value in self.cli.router_models().items():
             choices.append((key, f"{value.get('display_name', key)}  [{key}]"))
         for key, profile in self.cli.api_profiles.profiles.items():
@@ -428,6 +518,15 @@ class OpenCLITui(App[None]):
 
     def _select_model(self, key: str | None) -> None:
         if not key:
+            return
+        management = {
+            "manage::add-model": self.action_add_model,
+            "manage::remove-model": self.action_remove_model,
+            "manage::add-api": self.action_add_api,
+            "manage::remove-api": self.action_remove_api,
+        }
+        if key in management:
+            management[key]()
             return
         if key.startswith("api::"):
             profile = self.cli.api_profiles.profiles.get(key[5:])
@@ -452,12 +551,268 @@ class OpenCLITui(App[None]):
             return
         self._load_selected_model(key)
 
+    def action_add_model(self) -> None:
+        self.push_screen(
+            FormScreen(
+                "Add GGUF model profile",
+                [
+                    ("name", "Display name", "", False),
+                    ("source", "Source: huggingface or local", "huggingface", False),
+                    ("path", "Repository owner/repo[:quant] or local .gguf path", "", False),
+                    ("file", "Exact GGUF filename (optional)", "", False),
+                    ("context", "Context window", "32768", False),
+                    ("output", "Max output tokens", "8192", False),
+                    ("temperature", "Temperature", "0.7", False),
+                    ("thinking", "Thinking support: yes/no", "no", False),
+                    ("vision", "Vision support: yes/no", "no", False),
+                ],
+            ),
+            self._create_model_profile,
+        )
+
+    @work(thread=True, exclusive=True)
+    def _create_model_profile(self, values: dict[str, str] | None) -> None:
+        if not values:
+            return
+        self.call_from_thread(self._set_busy, True, "Saving model profile…")
+        from main.model_registry import ModelRegistryError
+
+        try:
+            key = self.cli.model_registry.add(
+                name=values["name"],
+                source_type=values["source"],
+                path=values["path"],
+                llama_file=values["file"],
+                context=values["context"],
+                max_tokens=values["output"],
+                temperature=values["temperature"],
+                has_thinking=values["thinking"].casefold() in {"yes", "y", "true", "1"},
+                supports_vision=values["vision"].casefold() in {"yes", "y", "true", "1"},
+                reserved_keys=set(self.cli.MODELS) | set(self.cli.BUILTIN_MODELS),
+            )
+            if self.cli.engine is not None:
+                self.cli.engine.register_models(self.cli.model_registry.engine_models())
+            self.cli.model_selection_mode = "manual"
+            self.cli.manual_model_key = key
+            self.cli.agent_runtime = None
+            success = self.cli.load_model(key, self.cli.quant, show_picker=False, render=False)
+            message = f"Model profile {'added and loaded' if success else 'saved; load failed'}: {key}"
+        except (ModelRegistryError, OSError, ValueError) as error:
+            message = f"Model profile not added: {error}"
+        self.call_from_thread(self._mount_message, message, "event-card")
+        self.call_from_thread(self._refresh_state)
+        self.call_from_thread(self._set_busy, False)
+
+    def action_remove_model(self) -> None:
+        choices = [
+            (key, f"{value.get('display_name', key)} · {value.get('path', '')}")
+            for key, value in self.cli.custom_models().items()
+        ]
+        if not choices:
+            self._mount_message("No user-added model profiles.", "event-card")
+            return
+        self.push_screen(
+            ChoiceScreen("Remove GGUF profile", choices), self._confirm_remove_model
+        )
+
+    def _confirm_remove_model(self, key: str | None) -> None:
+        if key:
+            self.push_screen(
+                ConfirmScreen(
+                    "Remove model profile",
+                    "Profile will be removed. GGUF file will not be deleted.",
+                ),
+                lambda confirmed: self._remove_model_profile(key) if confirmed else None,
+            )
+
+    def _remove_model_profile(self, key: str) -> None:
+        try:
+            if self.cli.mode == key:
+                self.cli.stop_server(mark_stopped=False)
+                self.cli.mode = "auto"
+                self.cli.manual_model_key = None
+            removed = self.cli.model_registry.remove(key)
+            if self.cli.engine is not None:
+                self.cli.engine.MODELS.pop(key, None)
+            self.cli.agent_runtime = None
+            message = f"Removed model profile: {removed.get('display_name', key)}"
+        except Exception as error:
+            message = f"Model profile removal failed: {error}"
+        self._mount_message(message, "event-card")
+        self._refresh_state()
+
+    def action_add_api(self) -> None:
+        from main.api_providers import PROVIDERS
+
+        self.push_screen(
+            ChoiceScreen(
+                "Select API provider",
+                [(key, definition.name) for key, definition in PROVIDERS.items()],
+            ),
+            self._select_api_provider,
+        )
+
+    def _select_api_provider(self, provider: str | None) -> None:
+        if not provider:
+            return
+        from main.api_providers import PROVIDERS
+
+        definition = PROVIDERS[provider]
+        api_key = self.cli._api_key or os.environ.get(
+            definition.environment_variable, ""
+        )
+        if api_key:
+            self._discover_api_models(provider, api_key)
+            return
+        self.push_screen(
+            TextPromptScreen(
+                f"{definition.name} API key",
+                f"Not saved; prefer {definition.environment_variable}",
+                password=True,
+            ),
+            lambda secret: self._discover_api_models(provider, secret) if secret else None,
+        )
+
+    @work(thread=True, exclusive=True)
+    def _discover_api_models(self, provider: str, api_key: str) -> None:
+        from main.api_providers import ApiProviderError, OpenAICompatibleClient
+
+        self.call_from_thread(self._set_busy, True, f"Discovering {provider} models…")
+        client = OpenAICompatibleClient(provider, api_key)
+        models: list[str] = []
+        try:
+            allowed = self.cli.permission_manager.request(
+                "api",
+                "list_api_models",
+                client.provider_name,
+                "Request provider model list and context metadata",
+            )
+            if allowed:
+                models = client.list_models()
+        except ApiProviderError as error:
+            self.call_from_thread(
+                self._mount_message, f"Model discovery failed: {error}", "event-card"
+            )
+        self._pending_api_client = client
+        self._pending_api_key = api_key
+        choices = [(model, model) for model in models[:100]]
+        choices.append(("__manual__", "Enter model ID and limits manually"))
+        self.call_from_thread(self._show_api_model_choices, choices)
+        self.call_from_thread(self._set_busy, False)
+
+    def _show_api_model_choices(self, choices: list[tuple[str, str]]) -> None:
+        self.push_screen(
+            ChoiceScreen("Select API model", choices), self._choose_discovered_api
+        )
+
+    def _choose_discovered_api(self, model: str | None) -> None:
+        if not model or self._pending_api_client is None:
+            return
+        metadata = (
+            {} if model == "__manual__"
+            else self._pending_api_client.model_metadata(model)
+        )
+        self._open_api_form(
+            self._pending_api_client.provider,
+            "" if model == "__manual__" else model,
+            str(metadata.get("context", 32768)),
+            str(metadata.get("max_tokens", 4096)),
+        )
+
+    def _open_api_form(
+        self, provider: str, model: str, context: str, output: str
+    ) -> None:
+        self.push_screen(
+            FormScreen(
+                "Add or connect API profile",
+                [
+                    ("provider", "Provider", provider, False),
+                    ("model", "Exact provider model ID", model, False),
+                    ("key", "API key (never saved; blank uses environment)", "", True),
+                    ("context", "Context window", context, False),
+                    ("output", "Max output tokens", output, False),
+                ],
+            ),
+            self._create_api_profile,
+        )
+
+    @work(thread=True, exclusive=True)
+    def _create_api_profile(self, values: dict[str, str] | None) -> None:
+        if not values:
+            self._pending_api_key = ""
+            self._pending_api_client = None
+            return
+        from main.api_providers import PROVIDERS
+
+        provider = values["provider"].casefold()
+        if provider not in PROVIDERS:
+            self.call_from_thread(
+                self._mount_message, "Unknown API provider.", "event-card"
+            )
+            return
+        api_key = values["key"] or self._pending_api_key or os.environ.get(
+            PROVIDERS[provider].environment_variable, ""
+        )
+        self._pending_api_key = ""
+        self._pending_api_client = None
+        self.call_from_thread(self._set_busy, True, f"Connecting {provider}…")
+        try:
+            context = int(values["context"])
+            output = int(values["output"])
+            if not 512 <= context <= 1_000_000 or not 64 <= output <= context // 2:
+                raise ValueError("Invalid context or output token limit")
+            success = self.cli._activate_api(
+                provider,
+                api_key,
+                values["model"],
+                context_window=context,
+                max_output_tokens=output,
+            )
+            message = (
+                f"API ready: {provider} · {values['model']} · {context:,} context"
+                if success else "API activation failed."
+            )
+        except (OSError, ValueError) as error:
+            message = f"API profile not added: {error}"
+        self.call_from_thread(self._mount_message, message, "event-card")
+        self.call_from_thread(self._refresh_state)
+        self.call_from_thread(self._set_busy, False)
+
+    def action_remove_api(self) -> None:
+        choices = [
+            (key, f"{value['provider']} · {value['model']}")
+            for key, value in self.cli.api_profiles.profiles.items()
+        ]
+        if not choices:
+            self._mount_message("No saved API profiles.", "event-card")
+            return
+        self.push_screen(
+            ChoiceScreen("Remove API profile", choices), self._confirm_remove_api
+        )
+
+    def _confirm_remove_api(self, key: str | None) -> None:
+        if key:
+            self.push_screen(
+                ConfirmScreen("Remove API profile", "API key is not stored."),
+                lambda confirmed: self._remove_api_profile(key) if confirmed else None,
+            )
+
+    def _remove_api_profile(self, key: str) -> None:
+        try:
+            removed = self.cli.api_profiles.remove(key)
+            message = f"Removed API profile: {removed['provider']} · {removed['model']}"
+        except (KeyError, OSError, ValueError) as error:
+            message = f"API profile removal failed: {error}"
+        self._mount_message(message, "event-card")
+
     @work(thread=True, exclusive=True)
     def _activate_api_profile(self, provider: str, model: str, api_key: str) -> None:
         self.call_from_thread(self._set_busy, True, f"Connecting {provider}…")
         output = io.StringIO()
         with redirect_stdout(output):
-            success = self.cli._activate_api(provider, api_key, model)
+            success = self.cli._activate_api(
+                provider, api_key, model, refresh_metadata=True
+            )
         self.call_from_thread(
             self._mount_message,
             f"API {'ready' if success else 'failed'}: {provider} · {model}",
@@ -475,7 +830,14 @@ class OpenCLITui(App[None]):
         self.call_from_thread(self._set_busy, False)
 
     def action_sessions(self) -> None:
-        choices = [(str(path), path.stem) for path in self.cli.session_memory.list()]
+        choices = []
+        for path in self.cli.session_memory.list():
+            try:
+                record = self.cli.session_memory.load_record(path)
+                label = record.title or path.stem
+            except (OSError, ValueError):
+                label = path.stem
+            choices.append((str(path), label))
         if not choices:
             self._mount_message("No previous workspace sessions.", "event-card")
             return
@@ -483,20 +845,47 @@ class OpenCLITui(App[None]):
 
     def _select_session(self, value: str | None) -> None:
         if value:
-            self._import_session(Path(value))
+            path = Path(value)
+            self.push_screen(
+                ChoiceScreen(
+                    "Session action",
+                    [
+                        ("resume", "Resume full session"),
+                        ("import", "Import compact memory"),
+                    ],
+                ),
+                lambda action: self._open_session(path, action),
+            )
+
+    def _open_session(self, path: Path, action: str | None) -> None:
+        if action == "resume":
+            self._resume_session(path)
+        elif action == "import":
+            self._import_session(path)
 
     @work(thread=True, exclusive=True)
     def _import_session(self, path: Path) -> None:
         self.call_from_thread(self._set_busy, True, "Importing session memory…")
         try:
-            content = self.cli.session_memory.load(path)
-            if not self.cli.ensure_agent_runtime():
-                raise RuntimeError("Agent runtime unavailable")
-            self.cli.agent_runtime.load_memory(content, path.name)
-            message = f"Imported session memory: {path.stem}"
+            title = self.cli.import_session_memory(path)
+            message = f"Imported memory capsule: {title}"
         except Exception as error:
             message = f"Session import failed: {error}"
         self.call_from_thread(self._mount_message, message, "event-card")
+        self.call_from_thread(self._refresh_state)
+        self.call_from_thread(self._set_busy, False)
+
+    @work(thread=True, exclusive=True)
+    def _resume_session(self, path: Path) -> None:
+        self.call_from_thread(self._set_busy, True, "Resuming session")
+        try:
+            title, restored = self.cli.resume_chat_session(path)
+            state = "full history restored" if restored else "archive opened; runtime history unavailable"
+            message = f"Resumed: {title} · {state}"
+        except Exception as error:
+            message = f"Session resume failed: {error}"
+        self.call_from_thread(self._mount_message, message, "event-card")
+        self.call_from_thread(self._sync_session_plan)
         self.call_from_thread(self._refresh_state)
         self.call_from_thread(self._set_busy, False)
 
@@ -507,12 +896,8 @@ class OpenCLITui(App[None]):
         if query.startswith(("/", "!")):
             output = io.StringIO()
             try:
-                if query.lower() in {"/model-add", "/modeladd", "/model-rm", "/modelrm", "/api-del"}:
-                    result = True
-                    output.write("Profile editing remains in classic REPL for this release.")
-                else:
-                    with redirect_stdout(output):
-                        result = self.cli.handle_command(query)
+                with redirect_stdout(output):
+                    result = self.cli.handle_command(query)
                 if result is False:
                     self.call_from_thread(self.exit)
             except Exception as error:
@@ -523,8 +908,27 @@ class OpenCLITui(App[None]):
             self.call_from_thread(self._sync_session_plan)
         else:
             self.call_from_thread(self._begin_assistant)
+            pending_tokens = ""
+            last_render = time.monotonic()
             for event in self.cli.stream_turn(query, think_mode=think_mode):
+                if event.type == "token":
+                    pending_tokens += event.content
+                    if len(pending_tokens) < 512 and time.monotonic() - last_render < 0.05:
+                        continue
+                    event = AgentEvent("token", pending_tokens)
+                    pending_tokens = ""
+                    last_render = time.monotonic()
+                elif pending_tokens:
+                    self.call_from_thread(
+                        self._handle_event, AgentEvent("token", pending_tokens)
+                    )
+                    pending_tokens = ""
                 self.call_from_thread(self._handle_event, event)
+            if pending_tokens:
+                self.call_from_thread(
+                    self._handle_event, AgentEvent("token", pending_tokens)
+                )
+            self.call_from_thread(self._sync_session_plan)
         self.call_from_thread(self._refresh_state)
         self.call_from_thread(self._set_busy, False)
 
@@ -536,13 +940,23 @@ class OpenCLITui(App[None]):
 
     def _begin_assistant(self) -> None:
         self._assistant_text = ""
+        self._response_render_truncated = False
         self._assistant = Markdown("_Thinking…_", classes="assistant-message")
         self.query_one("#timeline", VerticalScroll).mount(self._assistant)
 
     def _handle_event(self, event: AgentEvent) -> None:
         self._events.append(event)
         if event.type == "token":
-            self._assistant_text += event.content
+            remaining = self.MAX_RENDERED_RESPONSE_CHARS - len(self._assistant_text)
+            if remaining <= 0:
+                if not self._response_render_truncated:
+                    self._response_render_truncated = True
+                    self._mount_message(
+                        "Response display capped for TUI stability; full bounded response remains in session.",
+                        "event-card",
+                    )
+                return
+            self._assistant_text += event.content[:remaining]
             if self._assistant:
                 self._assistant.update(self._assistant_text)
         elif event.type == "status":
@@ -559,8 +973,13 @@ class OpenCLITui(App[None]):
             details = dict(event.details)
             diff = str(details.get("diff", "")) or "Diff unavailable"
             suffix = " (truncated)" if details.get("truncated") else ""
-            title = f"Change · {details.get('path', event.summary)}{suffix}"
-            self._mount_collapsible(title, diff)
+            added = int(details.get("added_lines", 0))
+            removed = int(details.get("removed_lines", 0))
+            title = (
+                f"Change · {details.get('path', event.summary)} "
+                f"(+{added}/-{removed}){suffix}"
+            )
+            self._mount_collapsible(title, self._diff_preview(diff))
             self._inspect(f"{title}\n\n{diff}")
         elif event.type == "error":
             self._mount_message(f"Error · {event.content}", "event-card")
@@ -574,9 +993,29 @@ class OpenCLITui(App[None]):
     def _mount_message(self, text: str, classes: str) -> None:
         self.query_one("#timeline", VerticalScroll).mount(Static(text, classes=classes))
 
-    def _mount_collapsible(self, title: str, body: str) -> None:
+    @staticmethod
+    def _diff_preview(diff: str) -> Text:
+        """Render bounded unified diffs as text, never Textual markup."""
+        preview = Text()
+        for line in diff.splitlines(keepends=True):
+            if line.startswith("+") and not line.startswith("+++"):
+                preview.append(line, style="green")
+            elif line.startswith("-") and not line.startswith("---"):
+                preview.append(line, style="red")
+            elif line.startswith("@@"):
+                preview.append(line, style="bold cyan")
+            else:
+                preview.append(line, style="dim")
+        return preview
+
+    def _mount_collapsible(self, title: str, body: str | Text) -> None:
         self.query_one("#timeline", VerticalScroll).mount(
-            Collapsible(Static(body), title=title, collapsed=True, classes="event-card")
+            Collapsible(
+                Static(body, markup=False),
+                title=title,
+                collapsed=True,
+                classes="event-card",
+            )
         )
 
     def _inspect(self, text: str) -> None:
@@ -607,7 +1046,7 @@ class OpenCLITui(App[None]):
     def _refresh_plan(self, selected: int | None = None) -> None:
         view = self.query_one("#plan-list", ListView)
         view.clear()
-        markers = {"pending": "○", "in_progress": "◐", "completed": "●"}
+        markers = {"pending": "○", "in_progress": "◐", "completed": "●", "dismissed": "×"}
         for item in self.plan_items:
             view.append(ListItem(Label(f"{markers[item.status]} {item.text}")))
         if selected is not None and self.plan_items:
@@ -615,19 +1054,21 @@ class OpenCLITui(App[None]):
 
     def _sync_plan_context(self) -> None:
         self.cli.task_plan_context = "\n".join(
-            f"- [{item.status}] {item.text}" for item in self.plan_items
+            f"- [{item.status}] {item.text} (id: {item.id})" for item in self.plan_items
         )
 
     def _sync_session_plan(self) -> None:
         if self.cli.chat_session is None:
             return
         expected_name = f"{self.cli.chat_session.session_id}.json"
-        if self.plan_store is not None and self.plan_store.path.name == expected_name:
-            return
-        self.plan_store = TaskPlanStore(
-            Path.cwd(), self.cli.chat_session.session_id, root=self.state_root
-        )
+        if self.plan_store is None or self.plan_store.path.name != expected_name:
+            self.plan_store = TaskPlanStore(
+                Path.cwd(), self.cli.chat_session.session_id, root=self.state_root
+            )
+            self.cli.task_plan_store = self.plan_store
         self.plan_items = self.plan_store.load()
+        if self.cli.agent_runtime is not None:
+            self.cli.agent_runtime.task_plan_store = self.plan_store
         self._sync_plan_context()
         self._refresh_plan()
 

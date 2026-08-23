@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Dict, Mapping, Optional
 
 from .model_profiles import ModelCapabilityProfile
@@ -80,9 +80,10 @@ class ContextAccountingService:
             counts[name] = count
             estimated = estimated or item_estimated
         used = sum(counts.values())
+        safe_reserve = max(64, self.profile.context_window // 2)
         reserve = min(
             output_reserve or self.profile.max_output_tokens,
-            self.profile.context_window - 1,
+            safe_reserve,
         )
         available = max(0, self.profile.context_window - used - reserve)
         percent = min(100.0, used * 100.0 / self.profile.context_window)

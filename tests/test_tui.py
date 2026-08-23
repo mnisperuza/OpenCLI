@@ -3,11 +3,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import patch
+from textual.widgets import Collapsible
 
 from main.cli import OpenCLI, main
 from main.session_memory import SessionMemoryStore
 from main.task_plan import TaskPlanStore
-from main.tui import OpenCLITui, PermissionScreen
+from main.tui import ChoiceScreen, FormScreen, OpenCLITui, PermissionScreen
 from main.permissions import PermissionDecision, PermissionRequest
 from main.ui_events import AgentEvent
 
@@ -38,6 +39,30 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 self.assertEqual(app._assistant_text, "Hello")
                 self.assertEqual(app._events[-1].type, "tool_result")
 
+    async def test_file_preview_treats_code_as_text_not_markup(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._handle_event(
+                    AgentEvent(
+                        "file_change",
+                        summary="example.py",
+                        details={
+                            "path": "example.py",
+                            "diff": "+value = [\"markup-safe\"]\n-old = 1\n",
+                            "added_lines": 1,
+                            "removed_lines": 1,
+                        },
+                    )
+                )
+                await pilot.pause()
+                preview = app.query_one(Collapsible)
+                preview.collapsed = False
+                await pilot.pause()
+                self.assertFalse(preview.collapsed)
+
     async def test_permission_escape_denies(self):
         with TemporaryDirectory() as directory:
             cli = OpenCLI(dry_run=True)
@@ -61,6 +86,23 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertEqual(app.query_one("#plan-pane").styles.display, "none")
                 self.assertEqual(app.query_one("#inspector-pane").styles.display, "none")
+
+    async def test_model_manager_exposes_profile_crud_inside_tui(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app.action_models()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, ChoiceScreen)
+                values = {value for value, _label in app.screen.choices}
+                self.assertIn("manage::add-model", values)
+                self.assertIn("manage::add-api", values)
+                app.pop_screen()
+                app.action_add_model()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, FormScreen)
 
     async def test_enter_and_send_button_submit_while_shift_enter_adds_line(self):
         with TemporaryDirectory() as directory:
@@ -145,6 +187,18 @@ class TuiCommandTests(TestCase):
             loaded = store.load()
         self.assertEqual(loaded[0].text, "Run focused tests")
         self.assertEqual(loaded[0].status, "in_progress")
+
+    def test_plan_item_can_be_completed_or_dismissed_by_stable_id(self):
+        with TemporaryDirectory() as directory:
+            store = TaskPlanStore(Path.cwd(), "session", Path(directory))
+            items = []
+            item = TaskPlanStore.add(items, "Remove obsolete step")
+            store.save(items)
+            updated = store.update_status(item.id, "dismissed")
+            loaded = store.load()
+        self.assertEqual(updated.status, "dismissed")
+        self.assertEqual(loaded[0].id, item.id)
+        self.assertEqual(loaded[0].status, "dismissed")
 
     def test_stream_turn_exposes_typed_live_events_and_records_usage(self):
         class Engine:

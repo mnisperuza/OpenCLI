@@ -67,6 +67,8 @@ class OpenAICompatibleClient:
         self.model = self.normalize_model_id(model)
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens: Optional[int] = None
+        self.max_stream_chars: Optional[int] = 96_000
+        self._model_metadata: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def normalize_model_id(value: str) -> str:
@@ -132,7 +134,8 @@ class OpenAICompatibleClient:
             raise self._safe_error(error) from error
 
         models = []
-        for item in payload.get("data", []):
+        items = payload.get("data", []) if isinstance(payload, dict) else []
+        for item in items:
             if not isinstance(item, dict) or not isinstance(item.get("id"), str):
                 continue
             try:
@@ -152,7 +155,68 @@ class OpenAICompatibleClient:
                     continue
             if model_id:
                 models.append(model_id)
+                provider_data = item.get("top_provider")
+                if not isinstance(provider_data, dict):
+                    provider_data = {}
+                limits = item.get("limits")
+                if not isinstance(limits, dict):
+                    limits = {}
+                model_metadata = item.get("metadata")
+                if not isinstance(model_metadata, dict):
+                    model_metadata = {}
+                context = self._first_positive_int(
+                    item.get("context_length"),
+                    item.get("context_window"),
+                    item.get("input_token_limit"),
+                    item.get("inputTokenLimit"),
+                    item.get("max_context_length"),
+                    item.get("max_input_tokens"),
+                    provider_data.get("context_length"),
+                    provider_data.get("context_window"),
+                    limits.get("context"),
+                    limits.get("context_length"),
+                    limits.get("input_tokens"),
+                    model_metadata.get("context_length"),
+                    model_metadata.get("context_window"),
+                )
+                output = self._first_positive_int(
+                    item.get("max_output_tokens"),
+                    item.get("output_token_limit"),
+                    item.get("outputTokenLimit"),
+                    item.get("maxOutputTokens"),
+                    item.get("max_completion_tokens"),
+                    provider_data.get("max_completion_tokens"),
+                    provider_data.get("max_output_tokens"),
+                    limits.get("output_tokens"),
+                    limits.get("max_output_tokens"),
+                    model_metadata.get("max_output_tokens"),
+                )
+                metadata: Dict[str, Any] = {
+                    "supports_tools": not isinstance(supported, list)
+                    or "tools" in supported,
+                }
+                if context:
+                    metadata["context"] = context
+                if output:
+                    metadata["max_tokens"] = output
+                self._model_metadata[model_id] = metadata
         return sorted(set(models), key=str.casefold)
+
+    @staticmethod
+    def _first_positive_int(*values: Any) -> Optional[int]:
+        for value in values:
+            if isinstance(value, bool):
+                continue
+            try:
+                number = int(value)
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                return number
+        return None
+
+    def model_metadata(self, model: Optional[str] = None) -> Dict[str, Any]:
+        return dict(self._model_metadata.get(model or self.model, {}))
 
     def stream_chat(
         self,
@@ -178,6 +242,8 @@ class OpenAICompatibleClient:
             method="POST",
         )
         calls: Dict[int, Dict[str, str]] = {}
+        emitted_chars = 0
+        provider_limited = False
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 for raw_line in response:
@@ -215,7 +281,26 @@ class OpenAICompatibleClient:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content")
                     if isinstance(content, str) and content:
+                        limit = self.max_stream_chars
+                        if isinstance(limit, int) and limit > 0:
+                            remaining = limit - emitted_chars
+                            if remaining <= 0:
+                                yield {
+                                    "type": "output_limit",
+                                    "content": "OpenCLI stopped oversized API output.",
+                                }
+                                return
+                            if len(content) > remaining:
+                                yield {"type": "token", "content": content[:remaining]}
+                                yield {
+                                    "type": "output_limit",
+                                    "content": "OpenCLI stopped oversized API output.",
+                                }
+                                return
+                        emitted_chars += len(content)
                         yield {"type": "token", "content": content}
+                    if choices[0].get("finish_reason") == "length":
+                        provider_limited = True
                     for tool_delta in delta.get("tool_calls") or []:
                         if not isinstance(tool_delta, dict):
                             continue
@@ -239,6 +324,11 @@ class OpenAICompatibleClient:
         except (OSError, URLError) as error:
             raise self._safe_error(error) from error
 
+        if provider_limited:
+            yield {
+                "type": "output_limit",
+                "content": "Provider stopped output at configured token limit.",
+            }
         if calls:
             yield {
                 "type": "tool_calls",

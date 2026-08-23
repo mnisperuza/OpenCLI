@@ -11,7 +11,7 @@ from pathlib import Path
 import uuid
 
 
-PLAN_STATUSES = ("pending", "in_progress", "completed")
+PLAN_STATUSES = ("pending", "in_progress", "completed", "dismissed")
 
 
 @dataclass
@@ -68,6 +68,18 @@ class TaskPlanStore:
         item = TaskPlanItem(uuid.uuid4().hex[:8], cleaned)
         items.append(item)
         return item
+
+    def update_status(self, item_id: str, status: str) -> TaskPlanItem:
+        """Update one persisted item for an agent or UI action."""
+        if status not in PLAN_STATUSES:
+            raise ValueError(f"Unknown plan status: {status}")
+        items = self.load()
+        for item in items:
+            if item.id == item_id:
+                item.status = status
+                self.save(items)
+                return item
+        raise ValueError(f"Task-plan item not found: {item_id}")
 
 
 __all__ = ["PLAN_STATUSES", "TaskPlanItem", "TaskPlanStore"]

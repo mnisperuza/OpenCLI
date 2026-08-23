@@ -4,6 +4,8 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
+from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
+
 from main.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, RuntimeConfig
 from main.api_profiles import ApiProfileRegistry
 from main.cli import OpenCLI
@@ -113,6 +115,26 @@ class WorkspaceToolSafetyTests(TestCase):
             self.assertEqual(change["details"]["path"], "note.txt")
             self.assertIn("-old", change["details"]["diff"])
             self.assertIn("+new", change["details"]["diff"])
+
+    def test_file_preview_is_bounded_by_lines_and_characters(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            target = root / "large.txt"
+            target.write_text("old\n" * 300, encoding="utf-8")
+            events = []
+            tools = LocalWorkspaceTools(
+                root,
+                RuntimeConfig(max_diff_chars=1_000, max_diff_lines=20),
+                event_sink=events.append,
+                permission_callback=lambda *_request: True,
+            )
+
+            tools.write_text_file("large.txt", "new\n" * 300)
+
+            change = next(event for event in events if event["type"] == "file_change")
+            self.assertTrue(change["details"]["truncated"])
+            self.assertLessEqual(len(change["details"]["diff"]), 1_100)
+            self.assertIn("preview truncated", change["details"]["diff"])
 
 
 class ModelRegistryTests(TestCase):
@@ -247,6 +269,86 @@ class ModelRegistryTests(TestCase):
                 {"provider": "groq", "model": "test/model"},
             )
 
+    def test_api_activation_applies_and_saves_explicit_context_limits(self):
+        class Engine:
+            def __init__(self):
+                self.MODELS = {}
+                self.client = None
+
+            def configure_api(self, client):
+                self.client = client
+                self.MODELS["api"] = {}
+                return True, "API ready"
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            cli = OpenCLI(dry_run=True)
+            cli.engine = Engine()
+            cli.api_profiles = ApiProfileRegistry(root / "api-profiles.json")
+            cli.permission_manager = PermissionManager(
+                root,
+                state_file=root / "permissions.json",
+                approval_callback=lambda _request: "always_allow",
+            )
+
+            self.assertTrue(
+                cli._activate_api(
+                    "openrouter",
+                    "secret",
+                    "nvidia/model",
+                    context_window=131072,
+                    max_output_tokens=8192,
+                )
+            )
+
+            self.assertEqual(cli.engine.MODELS["api"]["context"], 131072)
+            self.assertEqual(cli.engine.client.max_output_tokens, 8192)
+            self.assertEqual(
+                cli.api_profiles.default()["context_window"], 131072
+            )
+
+    def test_saved_api_activation_refreshes_missing_provider_limits(self):
+        class Engine:
+            def __init__(self):
+                self.MODELS = {}
+
+            def configure_api(self, _client):
+                self.MODELS["api"] = {}
+                return True, "API ready"
+
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            cli = OpenCLI(dry_run=True)
+            cli.engine = Engine()
+            cli.api_profiles = ApiProfileRegistry(root / "api-profiles.json")
+            cli.api_profiles.save("openrouter", "nvidia/model")
+            cli.permission_manager = PermissionManager(
+                root,
+                state_file=root / "permissions.json",
+                approval_callback=lambda _request: "always_allow",
+            )
+            with (
+                patch(
+                    "main.cli.OpenAICompatibleClient.list_models",
+                    return_value=["nvidia/model"],
+                ),
+                patch(
+                    "main.cli.OpenAICompatibleClient.model_metadata",
+                    return_value={"context": 131072, "max_tokens": 8192},
+                ),
+            ):
+                self.assertTrue(
+                    cli._activate_api(
+                        "openrouter",
+                        "secret",
+                        "nvidia/model",
+                        refresh_metadata=True,
+                    )
+                )
+
+            self.assertEqual(cli.engine.MODELS["api"]["context"], 131072)
+            self.assertEqual(cli.api_profiles.default()["max_output_tokens"], 8192)
+
 
 class ToolsOffRuntimeTests(TestCase):
     def test_disabled_runtime_exposes_no_tools(self):
@@ -278,6 +380,105 @@ class ToolsOffRuntimeTests(TestCase):
             list(runtime.generate_stream("Read 3.5"))
         local.assert_not_called()
         web.assert_not_called()
+
+    def test_compact_preserves_notes_and_recent_messages(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(), config=RuntimeConfig(persist_state=False)
+        )
+        runtime.set_memory_notes(["Use Python 3.12"])
+        runtime._messages.extend(
+            ModelRequest(parts=[UserPromptPart(content=f"turn {index}")])
+            for index in range(8)
+        )
+
+        result = runtime.compact(keep_recent_messages=3, max_summary_chars=1_000)
+        transcript = runtime.export_transcript()
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.removed_messages, 5)
+        self.assertIn("Use Python 3.12", transcript)
+        self.assertIn("turn 7", transcript)
+        self.assertIn("OPENCLI COMPACTED CONTEXT", transcript)
+
+    def test_macro_compact_accepts_loaded_model_structured_summary(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(), config=RuntimeConfig(persist_state=False)
+        )
+        runtime._messages.extend(
+            ModelRequest(parts=[UserPromptPart(content=f"turn {index}")])
+            for index in range(10)
+        )
+
+        result = runtime.compact(
+            keep_recent_messages=3,
+            summary="# Goal\nShip release\n\n# Open work\nRun tests",
+        )
+
+        self.assertIsNotNone(result)
+        self.assertIn("Ship release", runtime.export_transcript())
+        self.assertNotIn("USER: turn 0", runtime.export_transcript())
+        self.assertIn("USER: turn 9", runtime.export_transcript())
+
+    def test_clear_history_keeps_explicit_notes_when_requested(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(), config=RuntimeConfig(persist_state=False)
+        )
+        runtime.set_memory_notes(["Project uses uv"])
+        runtime._messages.append(ModelRequest(parts=[UserPromptPart(content="turn")]))
+
+        runtime.clear(preserve_memory_notes=True)
+
+        self.assertEqual(runtime.message_count, 1)
+        self.assertIn("Project uses uv", runtime.export_transcript())
+
+    def test_micro_compaction_prunes_tool_payload_but_keeps_archive(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(),
+            config=RuntimeConfig(
+                persist_state=False,
+                max_tool_result_context_chars=1_000,
+                retained_tool_result_chars=500,
+                max_tool_archive_chars=1_000,
+            ),
+        )
+        payload = "important-data-" * 200
+        runtime._messages = [
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name="web_fetch",
+                        tool_call_id="call-1",
+                        content={"url": "https://example.com", "content": payload},
+                    )
+                ]
+            )
+        ]
+
+        result = runtime.micro_compact_tool_results()
+
+        self.assertEqual(result.pruned_results, 1)
+        self.assertIn("MICRO-COMPACTED", runtime.export_transcript())
+        self.assertNotIn(payload, runtime.export_transcript())
+        archive = runtime.consume_tool_archives()[0]
+        self.assertIn(payload[:500], archive)
+        self.assertNotIn(payload, archive)
+        self.assertIn("Archive truncated", archive)
 
 
 class DockerSandboxTests(TestCase):

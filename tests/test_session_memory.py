@@ -30,8 +30,92 @@ class SessionMemoryStoreTests(TestCase):
             record = store.create()
 
             store.remember(record, "Use Python 3.12", "USER: first")
+            store.remember(record, "Use Python 3.12", "USER: first")
             store.save(record, "USER: second")
             archived = store.load(record.path)
 
             self.assertIn("- Use Python 3.12", archived)
+            self.assertEqual(archived.count("- Use Python 3.12"), 1)
             self.assertIn("USER: second", archived)
+
+    def test_context_load_uses_notes_checkpoint_and_recent_transcript(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            record = store.create()
+            store.remember(record, "Use Python 3.12", "USER: old")
+            store.record_compaction(
+                record,
+                summary="USER: Keep tests focused.",
+                source_transcript="USER: obsolete secret detail",
+                transcript="USER: current task\n\nASSISTANT: current answer",
+            )
+
+            context = store.load_context(record.path)
+
+        self.assertIn("Use Python 3.12", context)
+        self.assertIn("Keep tests focused", context)
+        self.assertIn("current task", context)
+        self.assertNotIn("obsolete secret detail", context)
+
+    def test_pruned_tool_archive_stays_out_of_loaded_model_context(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            record = store.create()
+            store.archive_tool_results(record, "FULL TOOL PAYLOAD " * 100)
+            store.save(record, "USER: recent")
+
+            archive = store.load(record.path)
+            context = store.load_context(record.path)
+
+        self.assertIn("FULL TOOL PAYLOAD", archive)
+        self.assertNotIn("FULL TOOL PAYLOAD", context)
+
+    def test_tool_archive_is_bounded(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            store.MAX_TOOL_ARCHIVE_CHARS = 20
+            store.MAX_TOOL_ARCHIVES = 2
+            record = store.create()
+
+            store.archive_tool_results(record, "first")
+            store.archive_tool_results(record, "x" * 30)
+            store.archive_tool_results(record, "latest")
+
+        self.assertEqual(len(record.tool_archives), 2)
+        self.assertIn("Archive truncated", record.tool_archives[0].content)
+        self.assertEqual(record.tool_archives[1].content, "latest")
+
+    def test_record_round_trip_preserves_title_and_archives_for_resume(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            record = store.create()
+            store.remember(record, "Use focused tests", "USER: first")
+            store.record_compaction(
+                record,
+                summary="Goal: fix preview",
+                source_transcript="USER: earlier",
+                transcript="USER: recent",
+            )
+            store.archive_tool_results(record, "tool payload")
+            store.set_title(record, "Fix preview crash", "USER: recent")
+
+            restored = store.load_record(record.path)
+            capsule = store.load_capsule(record.path)
+
+        self.assertEqual(restored.title, "Fix preview crash")
+        self.assertEqual(restored.notes, ["Use focused tests"])
+        self.assertEqual(restored.compactions[0].summary, "Goal: fix preview")
+        self.assertEqual(restored.tool_archives[0].content, "tool payload")
+        self.assertIn("SESSION CAPSULE: Fix preview crash", capsule)

@@ -37,6 +37,23 @@ class FakeDDGS:
 
 
 class WebRetrieverTests(TestCase):
+    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    def test_per_turn_fetch_limit_bounds_tool_context(self, _public_check):
+        client = FakeDDGS(extracted={"content": "evidence"})
+        retriever = WebRetriever(
+            client_factory=lambda: client,
+            max_fetches_per_turn=1,
+        )
+
+        first = retriever.web_fetch("https://example.com/one")
+        second = retriever.web_fetch("https://example.com/two")
+        retriever.begin_turn()
+        third = retriever.web_fetch("https://example.com/three")
+
+        self.assertEqual(first["content"], "evidence")
+        self.assertIn("fetch limit", second["error"])
+        self.assertEqual(third["content"], "evidence")
+
     def test_permission_denial_prevents_search_request(self):
         client = FakeDDGS(error=AssertionError("search must not run"))
         retriever = WebRetriever(

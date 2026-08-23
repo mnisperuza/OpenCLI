@@ -34,8 +34,8 @@ FALLBACK_PROFILE = ModelCapabilityProfile(
     display_name="Unknown model",
     model_id="unknown",
     backend="unknown",
-    context_window=16_384,
-    max_output_tokens=2_048,
+    context_window=32_768,
+    max_output_tokens=4_096,
     supports_tools=False,
     source="conservative fallback",
 )
@@ -143,7 +143,9 @@ class ModelProfileRegistry:
         context_window = int(metadata.get("context", FALLBACK_PROFILE.context_window))
         max_output = int(metadata.get("max_tokens", FALLBACK_PROFILE.max_output_tokens))
         context_window = min(max(context_window, 512), 1_000_000)
-        max_output = min(max(max_output, 64), context_window - 1)
+        # A model can advertise output almost as large as its whole context.
+        # Reserving that value leaves no room for even a clean prompt.
+        max_output = min(max(max_output, 64), max(64, context_window // 2))
         return replace(
             FALLBACK_PROFILE,
             key=key or model_id,
@@ -181,8 +183,8 @@ class ModelProfileRegistry:
             result = replace(profile, **changes, source=f"workspace override: {identifier}")
             if not 512 <= result.context_window <= 1_000_000:
                 raise ValueError("context_window must be between 512 and 1000000")
-            if not 64 <= result.max_output_tokens < result.context_window:
-                raise ValueError("max_output_tokens must be below context_window")
+            if not 64 <= result.max_output_tokens <= result.context_window // 2:
+                raise ValueError("max_output_tokens must use at most half the context window")
             return result
         except (TypeError, ValueError) as error:
             self._warn(f"Ignored invalid model override for {identifier}: {error}")

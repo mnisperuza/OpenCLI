@@ -52,6 +52,47 @@ class ApiProviderClientTests(unittest.TestCase):
         self.assertEqual(request.get_header("Authorization"), "Bearer secret")
         self.assertEqual(request.full_url, "https://openrouter.ai/api/v1/models")
 
+    def test_discovery_keeps_context_and_output_metadata(self):
+        payload = json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "tool/model",
+                        "supported_parameters": ["tools"],
+                        "context_length": 131072,
+                        "top_provider": {"max_completion_tokens": 16384},
+                    }
+                ]
+            }
+        ).encode()
+        client = OpenAICompatibleClient("openrouter", "secret")
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)):
+            client.list_models()
+
+        self.assertEqual(
+            client.model_metadata("tool/model"),
+            {"supports_tools": True, "context": 131072, "max_tokens": 16384},
+        )
+
+    def test_discovery_reads_nested_and_camel_case_limits(self):
+        payload = json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "nested/model",
+                        "inputTokenLimit": 200000,
+                        "metadata": {"max_output_tokens": 12000},
+                    }
+                ]
+            }
+        ).encode()
+        client = OpenAICompatibleClient("groq", "secret")
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)):
+            client.list_models()
+
+        self.assertEqual(client.model_metadata("nested/model")["context"], 200000)
+        self.assertEqual(client.model_metadata("nested/model")["max_tokens"], 12000)
+
     def test_streams_text_and_reassembles_native_tool_call(self):
         lines = [
             b'data: {"choices":[{"delta":{"content":"Hi "}}]}\n',
@@ -93,6 +134,19 @@ class ApiProviderClientTests(unittest.TestCase):
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(body["max_tokens"], 2048)
 
+    def test_stream_stops_at_hard_character_limit(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"abcdefgh"}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        client.max_stream_chars = 5
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(lines=lines)):
+            events = list(client.stream_chat([], []))
+
+        self.assertEqual(events[0], {"type": "token", "content": "abcde"})
+        self.assertEqual(events[1]["type"], "output_limit")
+
     def test_profiles_persist_provider_and_model_but_not_key(self):
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "api-profiles.json"
@@ -107,6 +161,33 @@ class ApiProviderClientTests(unittest.TestCase):
             self.assertNotIn("key", state_file.read_text(encoding="utf-8").lower())
             registry.remove(key)
             self.assertIsNone(ApiProfileRegistry(state_file).default())
+
+    def test_profiles_can_persist_discovered_context_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = ApiProfileRegistry(Path(directory) / "api-profiles.json")
+            registry.save(
+                "openrouter",
+                "nvidia/model",
+                context_window=131072,
+                max_output_tokens=8192,
+            )
+
+            self.assertEqual(
+                ApiProfileRegistry(registry.state_file).default()["context_window"],
+                131072,
+            )
+
+    def test_profile_rejects_unsafe_context_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            registry = ApiProfileRegistry(Path(directory) / "api-profiles.json")
+
+            with self.assertRaisesRegex(ValueError, "half the context"):
+                registry.save(
+                    "groq",
+                    "model",
+                    context_window=4096,
+                    max_output_tokens=4096,
+                )
 
 
 class FakeRemoteClient:
