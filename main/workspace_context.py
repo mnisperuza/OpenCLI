@@ -34,6 +34,35 @@ class WorkspaceContext:
             raise ValueError("Path must stay inside trusted workspace") from error
         return resolved
 
+    def resolve_mutation(self, path: str) -> Path:
+        """Resolve a write target while rejecting symlinked path components.
+
+        Atomic replacement protects the final write; rejecting symlinks closes
+        the common workspace-escape and path-swap route before that boundary.
+        """
+        cleaned = str(path or "").strip()
+        if not cleaned:
+            raise ValueError("Mutation path cannot be empty")
+        candidate = Path(cleaned).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.current_directory / candidate
+        lexical = candidate.absolute()
+        try:
+            relative = lexical.relative_to(self.root)
+        except ValueError as error:
+            raise ValueError("Path must stay inside trusted workspace") from error
+        cursor = self.root
+        for part in relative.parts:
+            cursor = cursor / part
+            if cursor.exists() and cursor.is_symlink():
+                raise ValueError("Mutation paths cannot traverse symbolic links")
+        parent = lexical.parent.resolve()
+        try:
+            parent.relative_to(self.root)
+        except ValueError as error:
+            raise ValueError("Mutation path parent must stay inside trusted workspace") from error
+        return lexical
+
     def set_current_directory(self, path: str) -> Path:
         target = self.resolve(path)
         if not target.is_dir():

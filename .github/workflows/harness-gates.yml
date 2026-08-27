@@ -1,0 +1,59 @@
+name: Harness release gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  enterprise-harness:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install release test dependencies
+        run: >-
+          python -m pip install
+          "pydantic-ai-slim>=1.107,<2"
+          "textual>=7,<9"
+          "rich>=14"
+          "pillow>=11,<13"
+          "prompt_toolkit>=3.0.43"
+          "questionary>=1.10"
+          "ddgs>=9.14,<10"
+          "tiktoken>=0.7,<1"
+          "cryptography>=44,<48"
+          "pytest>=8,<10"
+      - name: Compile runtime
+        run: python -m compileall -q main
+      - name: Run enterprise harness gates
+        run: python -m pytest tests/test_enterprise_harness.py -q
+
+  full-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install OpenCLI and test runner
+        run: python -m pip install -e . "pytest>=8,<10"
+      - name: Compile runtime
+        run: python -m compileall -q main
+      - name: Run full regression suite
+        run: python -m pytest -q

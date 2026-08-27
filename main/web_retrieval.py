@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from .harness_contracts import ErrorCode, ToolOutcome, ToolStatus
+from .tool_runtime import UntrustedContentScanner, evidence_id
+
 
 EventSink = Callable[[Dict[str, Any]], None]
 PermissionCallback = Callable[[str, str, str, str], bool]
@@ -95,6 +98,7 @@ class WebRetriever:
         event_sink: Optional[EventSink] = None,
         client_factory: Optional[Callable[[], Any]] = None,
         permission_callback: Optional[PermissionCallback] = None,
+        allowed_domains: tuple[str, ...] = (),
     ):
         self.max_results = max(1, max_results)
         self.max_content_chars = max(1_000, max_content_chars)
@@ -103,6 +107,9 @@ class WebRetriever:
         self.event_sink = event_sink
         self._client_factory = client_factory
         self.permission_callback = permission_callback
+        self.allowed_domains = tuple(
+            str(domain).casefold().lstrip(".") for domain in allowed_domains if str(domain).strip()
+        )
 
     def begin_turn(self) -> None:
         self._fetches_this_turn = 0
@@ -124,16 +131,44 @@ class WebRetriever:
                 {"type": "tool", "name": name, "arguments": arguments}
             )
 
-    def _result(self, name: str, summary: str) -> None:
+    def _result(
+        self,
+        name: str,
+        summary: str,
+        *,
+        status: ToolStatus = ToolStatus.SUCCESS,
+        error_code: ErrorCode = ErrorCode.NONE,
+        evidence_value: Any = None,
+        retry_after: Optional[float] = None,
+    ) -> None:
         if self.event_sink:
+            evidence = ()
+            if status in {ToolStatus.SUCCESS, ToolStatus.PARTIAL}:
+                evidence = (evidence_id(name, evidence_value if evidence_value is not None else summary),)
+            outcome = ToolOutcome(
+                status=status,
+                summary=summary,
+                error_code=error_code,
+                evidence_ids=evidence,
+                retry_after=retry_after,
+            )
             self.event_sink(
-                {"type": "tool_result", "name": name, "summary": summary}
+                {
+                    "type": "tool_result", "name": name, "summary": summary,
+                    "outcome": outcome.model_dump(mode="json"),
+                }
             )
 
     def _allowed(self, action: str, target: str, reason: str) -> bool:
         if self.permission_callback is None:
             return True
         return self.permission_callback("web", action, target, reason)
+
+    def _domain_allowed(self, url: str) -> bool:
+        if not self.allowed_domains:
+            return True
+        host = (urlsplit(url).hostname or "").casefold().rstrip(".")
+        return any(host == domain or host.endswith("." + domain) for domain in self.allowed_domains)
 
     def web_search(self, query: str, max_results: int = 5) -> Dict[str, Any]:
         """Search the live web and return ranked, deduplicated source records.
@@ -149,7 +184,10 @@ class WebRetriever:
         if not self._allowed(
             "web_search", query, "Search live web for current information"
         ):
-            self._result("web_search", "permission denied")
+            self._result(
+                "web_search", "permission denied", status=ToolStatus.DENIED,
+                error_code=ErrorCode.PERMISSION_DENIED,
+            )
             return {
                 "query": query,
                 "result_count": 0,
@@ -169,6 +207,11 @@ class WebRetriever:
                 backend="auto",
             )
         except Exception as error:
+            self._result(
+                "web_search", "Web search provider unavailable",
+                status=ToolStatus.RETRYABLE_ERROR,
+                error_code=ErrorCode.PROVIDER_UNAVAILABLE,
+            )
             raise WebRetrievalError(f"Web search failed: {error}") from error
 
         results = []
@@ -199,8 +242,11 @@ class WebRetriever:
             "retrieved_at": _utc_now(),
             "result_count": len(results),
             "results": results,
+            "safety": UntrustedContentScanner.scan(
+                "\n".join(item["title"] + " " + item["snippet"] for item in results)
+            ),
         }
-        self._result("web_search", f"{len(results)} results")
+        self._result("web_search", f"{len(results)} results", evidence_value=output)
         return output
 
     def web_fetch(self, url: str) -> Dict[str, Any]:
@@ -212,6 +258,18 @@ class WebRetriever:
         canonical = _canonical_url(url)
         if not canonical:
             raise ValueError("URL must be a public HTTP or HTTPS destination")
+        if not self._domain_allowed(canonical):
+            self._result(
+                "web_fetch", "destination blocked by network allowlist",
+                status=ToolStatus.DENIED,
+                error_code=ErrorCode.POLICY_BLOCKED,
+            )
+            return {
+                "url": canonical,
+                "content": "",
+                "permission_denied": True,
+                "policy_blocked": True,
+            }
         if self._fetches_this_turn >= self.max_fetches_per_turn:
             output = {
                 "url": canonical,
@@ -222,12 +280,18 @@ class WebRetriever:
                 ),
                 "recoverable": True,
             }
-            self._result("web_fetch", output["error"])
+            self._result(
+                "web_fetch", output["error"], status=ToolStatus.RETRYABLE_ERROR,
+                error_code=ErrorCode.OUTPUT_LIMIT,
+            )
             return output
         if not self._allowed(
             "web_fetch", canonical, "Read source content for grounded answer"
         ):
-            self._result("web_fetch", "permission denied")
+            self._result(
+                "web_fetch", "permission denied", status=ToolStatus.DENIED,
+                error_code=ErrorCode.PERMISSION_DENIED,
+            )
             return {"url": canonical, "permission_denied": True, "content": ""}
         if not _is_public_web_url(canonical):
             raise ValueError("URL must be a public HTTP or HTTPS destination")
@@ -253,7 +317,10 @@ class WebRetriever:
                 "error": f"Web fetch failed: {error_text}",
                 "recoverable": True,
             }
-            self._result("web_fetch", output["error"])
+            self._result(
+                "web_fetch", output["error"], status=ToolStatus.RETRYABLE_ERROR,
+                error_code=ErrorCode.PROVIDER_UNAVAILABLE,
+            )
             return output
 
         content_value = (extracted or {}).get("content", "")
@@ -265,8 +332,9 @@ class WebRetriever:
             "retrieved_at": _utc_now(),
             "content": content[: self.max_content_chars],
             "truncated": len(content) > self.max_content_chars,
+            "safety": UntrustedContentScanner.scan(content[: self.max_content_chars]),
         }
-        self._result("web_fetch", f"{len(output['content'])} characters")
+        self._result("web_fetch", f"{len(output['content'])} characters", evidence_value=output)
         return output
 
 

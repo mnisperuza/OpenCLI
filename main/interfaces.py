@@ -22,6 +22,8 @@ class ModelDescriptor:
     context_window: Optional[int] = None
     supports_tools: bool = False
     supports_vision: bool = False
+    supports_strict_schema: bool = False
+    supports_cancellation: bool = False
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,9 @@ class ToolDescriptor:
     category: str
     mutates_workspace: bool = False
     requires_permission: Optional[str] = None
+    version: str = "1.0.0"
+    risk: str = "low"
+    idempotent: bool = True
 
 
 @dataclass(frozen=True)

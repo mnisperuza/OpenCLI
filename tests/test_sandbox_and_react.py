@@ -10,7 +10,7 @@ from main.cli import OpenCLI
 from main.react_loop import (
     ReactCritique, ReactLoopController, ReactLoopLimitError, ReactLoopPolicy,
 )
-from main.sandbox import E2BSandbox, SandboxConfig, SandboxManager
+from main.sandbox import E2BSandbox, SandboxManager
 from main.task_plan import TaskPlanStore
 
 
@@ -358,13 +358,29 @@ class ReactLoopTests(TestCase):
         controller.begin_turn("run tests")
         controller.start_task("run tests")
         controller.before_tool("run", {"command": ["pytest"]})
-        controller.after_tool({"summary": "error: missing pytest"})
+        controller.after_tool({
+            "summary": "pytest unavailable",
+            "outcome": {
+                "schema_version": 1,
+                "status": "retryable_error",
+                "summary": "pytest unavailable",
+                "error_code": "execution_failed",
+            },
+        })
         controller.submit_critique({
             "progress": "pytest command unavailable",
             "next_action": "Try Python module invocation",
         })
         controller.before_tool("run", {"command": ["python", "-m", "pytest"]})
-        controller.after_tool({"summary": "failed: missing pytest"})
+        controller.after_tool({
+            "summary": "python module unavailable",
+            "outcome": {
+                "schema_version": 1,
+                "status": "retryable_error",
+                "summary": "python module unavailable",
+                "error_code": "execution_failed",
+            },
+        })
         with self.assertRaisesRegex(ReactLoopLimitError, "consecutive tool failures"):
             controller.before_tool("run", {"command": ["pytest", "-q"]})
 

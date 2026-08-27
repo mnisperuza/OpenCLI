@@ -8,6 +8,8 @@ from typing import Any, Dict, Generator, List, Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .provider_reliability import ProviderCapabilities, ProviderReliabilityController
+
 
 class ApiProviderError(RuntimeError):
     """Safe provider error that never includes an API key."""
@@ -69,6 +71,8 @@ class OpenAICompatibleClient:
         self.max_output_tokens: Optional[int] = None
         self.max_stream_chars: Optional[int] = 96_000
         self._model_metadata: Dict[str, Dict[str, Any]] = {}
+        self.reliability = ProviderReliabilityController()
+        self._capability_overrides: Dict[str, Any] = {}
 
     @staticmethod
     def normalize_model_id(value: str) -> str:
@@ -125,7 +129,10 @@ class OpenAICompatibleClient:
             method="GET",
         )
         try:
-            with urlopen(request, timeout=30) as response:
+            response_handle = self.reliability.call(
+                lambda: urlopen(request, timeout=30)
+            )
+            with response_handle as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except HTTPError as error:
             body = error.read().decode("utf-8", errors="replace")
@@ -218,6 +225,25 @@ class OpenAICompatibleClient:
     def model_metadata(self, model: Optional[str] = None) -> Dict[str, Any]:
         return dict(self._model_metadata.get(model or self.model, {}))
 
+    def capability_report(self, model: Optional[str] = None) -> Dict[str, Any]:
+        model_id = model or self.model
+        metadata = self.model_metadata(model_id)
+        profile = ProviderCapabilities(
+            provider=self.provider,
+            model=model_id,
+            native_tools=True,
+            named_tool_choice=self._capability_overrides.get("named_tool_choice"),
+            parallel_tools=self._capability_overrides.get("parallel_tools"),
+            strict_json_schema=self._capability_overrides.get("strict_json_schema"),
+            streaming_tool_arguments=True,
+            context_window=self._first_positive_int(metadata.get("context")),
+            max_output_tokens=self._first_positive_int(metadata.get("max_tokens"), self.max_output_tokens),
+            tokenizer="provider_reported_or_tiktoken",
+            cancellation=False,
+            observed_failures=self.reliability.status()["consecutive_failures"],
+        )
+        return {**profile.as_dict(), "transport": self.reliability.status()}
+
     def stream_chat(
         self,
         messages: List[Dict[str, Any]],
@@ -247,7 +273,10 @@ class OpenAICompatibleClient:
         emitted_chars = 0
         provider_limited = False
         try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
+            response_handle = self.reliability.call(
+                lambda: urlopen(request, timeout=self.timeout_seconds)
+            )
+            with response_handle as response:
                 for raw_line in response:
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
@@ -331,6 +360,7 @@ class OpenAICompatibleClient:
             ):
                 # Some OpenAI-compatible providers expose tools but reject
                 # required/named tool_choice. Strict prompt + host validation remain.
+                self._capability_overrides["named_tool_choice"] = False
                 yield from self.stream_chat(messages, tools, "auto")
                 return
             raise self._safe_error(error, body_text) from error

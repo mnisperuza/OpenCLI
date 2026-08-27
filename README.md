@@ -24,6 +24,7 @@ Supported now:
 - Session titles, full-session resume, and non-stacking compact memory import.
 - Model-visible task-plan status updates for completed and dismissed items.
 - Bounded ReAct loops: one tool action per model step, repeated-action/failure guards, mutation evidence, persistent detailed plans.
+- Enterprise harness: typed outcomes, evidence-backed completion, append-only run ledger, crash reconciliation, pause/resume, writer leases, redacted diagnostics, and verified mutation receipts.
 - Selectable Docker/E2B sandbox backends with explicit, conflict-aware E2B workspace sync.
 
 Preview or incomplete:
@@ -134,6 +135,11 @@ replace one bounded historical capsule in current chat.
 | `/memory clear` | Clear active runtime conversation while keeping durable user notes. |
 | `/memory notes`, `/memory forget`, `/memory list` | Review, remove, or list durable memory and workspace archives. |
 | `/memory current` | Show active archive path. |
+| `/memory records`, `/memory export` | Inspect or export provenance-aware enterprise memory records. |
+| `/memory correct ID TEXT`, `/memory delete ID` | Supersede or delete one durable memory record. |
+| `/harness status`, `/harness runs` | Inspect current and recoverable durable runs. |
+| `/harness reconcile ID`, `/harness resume ID` | Reconcile an interrupted run and bind the next message to it. |
+| `/harness debug ID` | Print a redacted event/receipt debug bundle. |
 | `/remember TEXT` | Save user-controlled session note. |
 | `/paste`, `/multiline` | Toggle experimental multiline input. |
 | `/think TEXT` | Send prompt with thinking hint; preview behavior. |

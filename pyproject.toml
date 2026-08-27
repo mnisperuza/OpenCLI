@@ -58,6 +58,14 @@ linux = ["bitsandbytes>=0.43.0"]
 perf = ["xformers>=0.0.25"]
 sandbox = ["e2b>=2.13,<3"]
 full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25", "e2b>=2.13,<3"]
+enterprise = [
+    "tenacity>=9,<10",
+    "opentelemetry-sdk>=1.40,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.40,<2",
+    "pydantic-evals>=1.107,<2",
+    "cryptography>=44,<48",
+]
+constrained = ["outlines>=1.2,<2"]
 
 [project.scripts]
 opencli = "main.cli:main"

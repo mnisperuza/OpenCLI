@@ -12,6 +12,9 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, Mapping
 
+from .harness_contracts import ToolOutcome, new_id
+from .tool_runtime import ProgressEvaluator, SemanticStagnationDetector, evidence_id
+
 
 class ReactLoopLimitError(RuntimeError):
     """Raised before another unsafe or unproductive tool action can execute."""
@@ -38,6 +41,9 @@ class ReactLoopPolicy:
     max_consecutive_failures: int = 3
     single_action_per_model_step: bool = True
     max_timeline_events: int = 30
+    adaptive_critique: bool = True
+    critique_interval: int = 1
+    stagnation_limit: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,10 @@ class ReactTimelineEvent:
 
 @dataclass
 class ReactLoopState:
+    schema_version: int = 1
+    run_id: str = ""
+    turn_id: str = ""
+    step_id: str = ""
     goal: str = ""
     requested: bool = False
     paths: tuple[str, ...] = ()
@@ -73,26 +83,37 @@ class ReactLoopState:
     phase: ReactPhase = ReactPhase.IDLE
     timeline: list[ReactTimelineEvent] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
+    evidence_ids: list[str] = field(default_factory=list)
+    outcomes: list[ToolOutcome] = field(default_factory=list)
+    stagnation_score: float = 0.0
+    escalation_level: int = 0
+    last_arguments: Dict[str, Any] = field(default_factory=dict)
+    progress_check: Dict[str, Any] = field(default_factory=dict)
     critique: ReactCritique | None = None
 
 
 class ReactLoopController:
     """Observe tool events and enforce one bounded ReAct turn."""
 
-    _FAILURE_MARKERS = (
-        "error", "failed", "denied", "unavailable", "timed out",
-        "not found", "unchanged", "conflict",
-    )
-
     def __init__(self, policy: ReactLoopPolicy | None = None):
         self.policy = policy or ReactLoopPolicy()
         self.enabled = True
         self.state = ReactLoopState()
+        self._stagnation = SemanticStagnationDetector()
+        self._progress = ProgressEvaluator()
 
-    def begin_turn(self, goal: str) -> None:
+    def begin_turn(
+        self, goal: str, *, run_id: str | None = None, turn_id: str | None = None
+    ) -> None:
         """Reset one user turn at the dispatcher boundary."""
         phase = ReactPhase.DISPATCH if self.enabled else ReactPhase.IDLE
-        self.state = ReactLoopState(goal=self._clean(goal, 500), phase=phase)
+        self._stagnation = SemanticStagnationDetector()
+        self.state = ReactLoopState(
+            run_id=run_id or new_id("run"),
+            turn_id=turn_id or new_id("turn"),
+            goal=self._clean(goal, 500),
+            phase=phase,
+        )
         self._record(phase, "User turn opened")
 
     @staticmethod
@@ -147,6 +168,8 @@ class ReactLoopController:
         limit = min(requested_limit, self.policy.max_steps)
         timeline = list(self.state.timeline)
         self.state = ReactLoopState(
+            run_id=self.state.run_id,
+            turn_id=self.state.turn_id,
             goal=cleaned_goal,
             requested=True,
             paths=paths,
@@ -213,27 +236,49 @@ class ReactLoopController:
             self._record(ReactPhase.HALTED, self.state.halted_reason)
             raise ReactLoopLimitError(self.state.halted_reason)
         self.state.steps += 1
+        self.state.step_id = new_id("step")
         self.state.last_tool = name
+        self.state.last_arguments = dict(arguments) if isinstance(arguments, Mapping) else {"value": arguments}
         self.state.phase = ReactPhase.ACT
         self._record(ReactPhase.ACT, f"Tool: {name}")
         return self.state.steps
 
-    def after_tool(self, event: Dict[str, Any]) -> None:
+    def after_tool(self, event: Mapping[str, Any]) -> Dict[str, Any]:
         if not self.enabled or not self.state.requested:
-            return
+            return {}
+        outcome = ToolOutcome.from_event(event)
         raw_summary = self._clean(event.get("summary", ""), 500)
-        summary = raw_summary.casefold()
+        if not raw_summary:
+            raw_summary = outcome.summary
         self.state.phase = ReactPhase.OBSERVE
         self._record(ReactPhase.OBSERVE, raw_summary or "Tool returned no summary")
         if raw_summary:
             self.state.evidence.append(raw_summary)
             self.state.evidence = self.state.evidence[-8:]
-        nonzero_exit = summary.startswith("exit ") and summary != "exit 0"
-        failed = bool(event.get("error")) or nonzero_exit or any(
-            marker in summary for marker in self._FAILURE_MARKERS
-        )
+        outcome_evidence = list(outcome.evidence_ids)
+        if outcome.succeeded and not outcome_evidence:
+            outcome_evidence.append(evidence_id(self.state.last_tool or "tool", {
+                "step": self.state.steps, "summary": raw_summary,
+            }))
+            outcome = outcome.model_copy(update={"evidence_ids": tuple(outcome_evidence)})
+        for item in outcome_evidence:
+            if item not in self.state.evidence_ids:
+                self.state.evidence_ids.append(item)
+        self.state.evidence_ids = self.state.evidence_ids[-24:]
+        self.state.outcomes.append(outcome)
+        self.state.outcomes = self.state.outcomes[-24:]
+        failed = outcome.failed
         self.state.consecutive_failures = (
             self.state.consecutive_failures + 1 if failed else 0
+        )
+        score = self._stagnation.observe(
+            self.state.last_tool, self.state.last_arguments, outcome
+        )
+        self.state.stagnation_score = score
+        self.state.progress_check = self._progress.evaluate(
+            outcome,
+            prior_evidence_ids=self.state.evidence_ids[:-len(outcome_evidence)] if outcome_evidence else self.state.evidence_ids,
+            stagnation_score=score,
         )
         if self.state.consecutive_failures >= self.policy.max_consecutive_failures:
             self.state.halted_reason = (
@@ -242,9 +287,17 @@ class ReactLoopController:
             )
             self.state.phase = ReactPhase.HALTED
             self._record(ReactPhase.HALTED, self.state.halted_reason)
+        elif score >= self.policy.stagnation_limit:
+            self.state.escalation_level += 1
+            self.state.phase = ReactPhase.CRITIQUE
+            self._record(
+                ReactPhase.CRITIQUE,
+                "Stagnation detected; repair arguments or choose a different evidence source",
+            )
         else:
             self.state.phase = ReactPhase.CRITIQUE
             self._record(ReactPhase.CRITIQUE, "Critique progress and choose next transition")
+        return dict(self.state.progress_check)
 
     def submit_critique(self, critique: ReactCritique | Mapping[str, Any]) -> Dict[str, Any]:
         """Validate bounded self-reflection and deterministically select next phase."""
@@ -300,6 +353,10 @@ class ReactLoopController:
             "consecutive_failures": self.state.consecutive_failures,
             "last_tool": self.state.last_tool,
             "recent_evidence": list(self.state.evidence),
+            "evidence_ids": list(self.state.evidence_ids),
+            "stagnation_score": self.state.stagnation_score,
+            "escalation_level": self.state.escalation_level,
+            "progress_check": dict(self.state.progress_check),
             "critique": critique,
             "halted_reason": self.state.halted_reason,
         }
@@ -310,12 +367,19 @@ class ReactLoopController:
             "requested": self.state.requested,
             "phase": self.state.phase.value,
             "goal": self.state.goal,
+            "run_id": self.state.run_id,
+            "turn_id": self.state.turn_id,
+            "step_id": self.state.step_id,
             "paths": list(self.state.paths),
             "max_steps": self._step_limit(),
             "steps": self.state.steps,
             "failures": self.state.consecutive_failures,
             "last_tool": self.state.last_tool,
             "halted_reason": self.state.halted_reason,
+            "evidence_ids": list(self.state.evidence_ids),
+            "stagnation_score": self.state.stagnation_score,
+            "escalation_level": self.state.escalation_level,
+            "progress_check": dict(self.state.progress_check),
             "timeline": [asdict(event) for event in self.state.timeline],
             "critique": asdict(self.state.critique) if self.state.critique else None,
             "single_action_per_model_step": self.policy.single_action_per_model_step,

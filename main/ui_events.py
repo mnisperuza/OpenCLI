@@ -18,11 +18,21 @@ class AgentEvent:
     input_tokens: int | None = None
     output_tokens: int | None = None
     details: Mapping[str, Any] = field(default_factory=dict)
+    schema_version: int = 1
+    event_id: str = ""
+    run_id: str = ""
+    turn_id: str = ""
+    step_id: str = ""
 
     @classmethod
     def from_chunk(cls, chunk: Mapping[str, Any]) -> "AgentEvent":
         return cls(
             type=str(chunk.get("type", "status")),
+            schema_version=int(chunk.get("schema_version", 1)),
+            event_id=str(chunk.get("event_id", "")),
+            run_id=str(chunk.get("run_id", "")),
+            turn_id=str(chunk.get("turn_id", "")),
+            step_id=str(chunk.get("step_id", "")),
             content=str(chunk.get("content", "")),
             name=str(chunk.get("name", "")),
             arguments=chunk.get("arguments", {}) if isinstance(chunk.get("arguments", {}), Mapping) else {},

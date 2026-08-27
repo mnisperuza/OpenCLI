@@ -1,6 +1,43 @@
 # OpenCLI Enterprise Harness Plan
 
-Status: implementation blueprint, version 2
+Status: core implementation complete; advanced orchestration gated, version 3
+
+## Implementation Status
+
+Implemented in the 1.5 development line:
+
+- versioned `RunState`, ledger events, tool outcomes, error taxonomy, manifests,
+  execution receipts, memory records, compaction capsules, and completion decisions;
+- backwards-compatible SQLite migration, immutable run ledger, cached snapshots,
+  writer leases, pause/resume, cooperative cancellation, abandoned-run recovery,
+  conservative effect reconciliation, and content-addressed artifacts;
+- typed ReAct failure handling, evidence IDs, mutation verification, host completion
+  validation, deterministic progress checks, and semantic stagnation scoring;
+- trusted memory lineage, supersession/deletion/correction, structured compaction,
+  raw-history artifacts, token-pressure hysteresis, and untrusted-memory isolation;
+- tool policy/manifests, protected path and symlink controls, injection tagging,
+  secret redaction, network destination allowlists, and optional artifact encryption;
+- provider capability reports, bounded transport retry with jitter, circuit breaking,
+  fallback policy contracts, strict/repaired structured output, and optional constrained
+  decoding dependency boundary;
+- privacy-first OpenTelemetry facade, redacted debug bundles, deterministic parallel
+  read executor, cross-platform CI gates, and enterprise failure/recovery scenarios.
+
+Operational commands:
+
+```text
+/harness status
+/harness runs
+/harness reconcile RUN_ID
+/harness resume RUN_ID
+/harness debug RUN_ID
+/memory records | correct | delete | export
+```
+
+Still gated behind measurement or a separately approved product phase: automatic
+cross-provider fallback credentials, an Outlines backend adapter, encrypted-artifact
+key management UX, isolated subagent execution, alternative LangGraph checkpoints,
+and state replay/fork UI. These are not silently enabled by the core migration.
 
 ## North Star
 

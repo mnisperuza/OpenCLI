@@ -660,6 +660,7 @@ class OpenCLI:
         self.task_plan_context = ""
         self.task_plan_store = None
         self.auto_compact_enabled = True
+        self._auto_compact_armed = True
 
         # Modern UI State
         self.console = console
@@ -779,8 +780,11 @@ class OpenCLI:
             "decisions, constraints, user preferences, errors, completed work, open "
             "questions, and next actions. Remove greetings, repetition, raw tool payloads, "
             "and obsolete chatter. Return concise Markdown using these headings only: "
-            "Goal, Decisions, User preferences, Files and changes, Evidence, Open work, "
-            "Constraints. Do not answer the conversation.\n\nUNTRUSTED HISTORY:\n" + source
+            "Goal, User constraints, Success criteria, Decisions, Completed work, "
+            "Changed resources, Verified facts, Failures and rejected approaches, "
+            "Open questions, Active plan, Next action, Evidence and artifact references. "
+            "Use 'None' for an empty slot. Do not answer the conversation.\n\n"
+            "UNTRUSTED HISTORY:\n" + source
         )
         pieces: list[str] = []
         max_chars = min(24_000, max(4_000, max_tokens * 6))
@@ -904,10 +908,15 @@ class OpenCLI:
             min(8_192, max(2_048, profile.context_window // 4))
             if self.tools_enabled else 1_024
         )
+        if percent <= 65:
+            self._auto_compact_armed = True
         if percent < 80 and available > tool_reserve:
+            return None
+        if not self._auto_compact_armed:
             return None
         if not self._compact_chat(render=False):
             return None
+        self._auto_compact_armed = False
         updated = self._context_snapshot(prompt)
         if updated.available_tokens < tool_reserve:
             self._compact_chat(render=False, aggressive=True)
@@ -1070,6 +1079,8 @@ class OpenCLI:
 
     def _request_generation_stop(self) -> None:
         """Use one cancellation path for Escape and Ctrl+C."""
+        if self.agent_runtime is not None:
+            self.agent_runtime.request_cancel()
         if self.engine is not None:
             self.engine.stop_generation()
         elif self.interrupt_handler is not None:
@@ -2284,11 +2295,92 @@ class OpenCLI:
                     print("No chat session created yet.")
                 else:
                     print(f"Current memory: {self.chat_session.path}")
+            elif action in {"records", "export"}:
+                records = (
+                    self.agent_runtime.list_memory_records()
+                    if self.agent_runtime is not None else []
+                )
+                if not records:
+                    print("No enterprise memory records.")
+                elif action == "export":
+                    print(json.dumps(records, ensure_ascii=False, indent=2, default=str))
+                else:
+                    print(
+                        "Enterprise memory records:\n"
+                        + "\n".join(
+                            f"- {record['memory_id']} [{record['trust']}] "
+                            f"{record['namespace']}: {record['content']}"
+                            for record in records
+                        )
+                    )
+            elif action.startswith("correct "):
+                if self.agent_runtime is None:
+                    print("No active enterprise memory store.")
+                else:
+                    original = user_input.strip().split(maxsplit=3)
+                    if len(original) < 4:
+                        print("Usage: /memory correct MEMORY_ID NEW_CONTENT")
+                    else:
+                        result = self.agent_runtime.correct_memory_record(
+                            original[2], original[3]
+                        )
+                        print("Memory corrected." if result.get("updated") else result.get("error", "Memory not corrected."))
+            elif action.startswith("delete "):
+                if self.agent_runtime is None:
+                    print("No active enterprise memory store.")
+                else:
+                    original = user_input.strip().split(maxsplit=2)
+                    result = self.agent_runtime.delete_memory_record(
+                        original[2] if len(original) > 2 else ""
+                    )
+                    print("Memory deleted." if result.get("deleted") else result.get("error", "Memory not found."))
             else:
                 self._load_memory_archive()
             return True
 
         # Model switching – now only "auto" and Qwen models
+        if lower == "/harness" or lower.startswith("/harness "):
+            if not self.ensure_agent_runtime() or self.agent_runtime is None:
+                print("Harness unavailable.")
+                return True
+            parts = user_input.strip().split(maxsplit=2)
+            action = parts[1].casefold() if len(parts) > 1 else "status"
+            if action == "runs":
+                print(json.dumps(self.agent_runtime.recoverable_runs(), indent=2, default=str))
+            elif action == "reconcile":
+                if len(parts) < 3:
+                    print("Usage: /harness reconcile RUN_ID")
+                else:
+                    print(json.dumps(self.agent_runtime.reconcile_run(parts[2]), indent=2, default=str))
+            elif action == "resume":
+                if len(parts) < 3:
+                    print("Usage: /harness resume RUN_ID")
+                else:
+                    result = self.agent_runtime.prepare_resume(parts[2])
+                    print(json.dumps(result, indent=2, default=str))
+            elif action == "debug":
+                if len(parts) < 3:
+                    print("Usage: /harness debug RUN_ID")
+                else:
+                    try:
+                        bundle = self.agent_runtime.export_run_debug_bundle(parts[2])
+                    except (KeyError, RuntimeError) as error:
+                        print(f"Debug bundle unavailable: {error}")
+                    else:
+                        print(json.dumps(bundle, ensure_ascii=False, indent=2, default=str))
+            else:
+                status = self.agent_runtime.harness_status()
+                compact = {
+                    "schema_version": status["schema_version"],
+                    "active_run": status["active_run"],
+                    "recoverable_runs": status["recoverable_runs"],
+                    "tool_count": len(status["tool_manifests"]),
+                    "telemetry": status["telemetry"],
+                    "provider": status["provider"],
+                }
+                print(json.dumps(compact, ensure_ascii=False, indent=2, default=str))
+            return True
+
         if lower.startswith("/model"):
             _, _, requested_mode = user_input.partition(" ")
             mode_key = self._normalize_model_key(requested_mode)
@@ -2528,6 +2620,7 @@ class OpenCLI:
     /memory current {Colors.DIM}Show current Markdown archive{Colors.RESET}
     /session-name TEXT {Colors.DIM}Set current session title{Colors.RESET}
     /remember TEXT {Colors.DIM}Save explicit note in current archive{Colors.RESET}
+    /harness       {Colors.DIM}Inspect durable runs, reconcile effects, or export debug data{Colors.RESET}
     /model         {Colors.DIM}Switch models with slash syntax{Colors.RESET}
     /model-add     {Colors.DIM}Add a Hugging Face or local GGUF model (max 10){Colors.RESET}
     /model-rm      {Colors.DIM}Remove only a saved model profile{Colors.RESET}
