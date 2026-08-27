@@ -1,4 +1,4 @@
-"""User-controlled, workspace-scoped task plans for the Textual UI."""
+"""User-visible, session-scoped task plans shared by CLI, TUI, and agent."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class TaskPlanItem:
 
 
 class TaskPlanStore:
-    """Persist manual plans outside the agent-writable workspace."""
+    """Persist reviewed plans outside normal workspace file tools."""
 
     def __init__(self, workspace: Path, session_id: str, root: Path | None = None):
         digest = hashlib.sha256(
@@ -68,6 +68,27 @@ class TaskPlanStore:
         item = TaskPlanItem(uuid.uuid4().hex[:8], cleaned)
         items.append(item)
         return item
+
+    def add_item(self, text: str) -> TaskPlanItem:
+        """Add and persist one item."""
+        items = self.load()
+        item = self.add(items, text)
+        self.save(items)
+        return item
+
+    def replace(self, steps: list[str]) -> list[TaskPlanItem]:
+        """Replace plan with a bounded ordered set of concrete steps."""
+        if not 1 <= len(steps) <= 30:
+            raise ValueError("A plan must contain between 1 and 30 steps")
+        items: list[TaskPlanItem] = []
+        for step in steps:
+            self.add(items, step)
+        self.save(items)
+        return items
+
+    def clear(self) -> None:
+        """Persist an empty plan without deleting session metadata."""
+        self.save([])
 
     def update_status(self, item_id: str, status: str) -> TaskPlanItem:
         """Update one persisted item for an agent or UI action."""

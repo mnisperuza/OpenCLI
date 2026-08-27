@@ -5,7 +5,7 @@ It runs GGUF models through llama.cpp and can use Groq, Gemini, or OpenRouter
 for a single API-backed session. Pydantic AI manages tool loops and tool
 validation.
 
-## Release 1.5.2 status
+## Release 1.5.3 status
 
 This release stabilizes the model-aware context and Textual agent workspace on
 top of the 1.5 base. OpenCLI now resolves model capability profiles, accounts
@@ -23,20 +23,28 @@ Supported now:
 - Bounded, syntax-safe diff previews with added/removed line highlighting.
 - Session titles, full-session resume, and non-stacking compact memory import.
 - Model-visible task-plan status updates for completed and dismissed items.
+- Bounded ReAct loops: one tool action per model step, repeated-action/failure guards, mutation evidence, persistent detailed plans.
+- Selectable Docker/E2B sandbox backends with explicit, conflict-aware E2B workspace sync.
 
 Preview or incomplete:
 
 - `/think` is a prompt hint, not a separate reasoning runtime.
 - `/paste` and `/multiline` toggle input mode; large-paste ergonomics are still experimental.
 - Model tool calling depends on selected local model. Enable `/tool-auto on` only for weaker models that need deterministic routing.
-- Docker commands require Docker Desktop running. OpenCLI does not install Docker or provide host-shell fallback.
-- MCP, plugins, subagents, agent-created detailed plans, and editor integration are not implemented in 1.5.2.
+- Docker commands require Docker Desktop. E2B requires optional SDK plus user API key. No host-shell fallback exists.
+- MCP, plugins, subagents, and editor integration are not implemented in 1.5.3.
 
 ## Install
 
 ```bash
 pip install opencli
 opencli
+```
+
+E2B support:
+
+```bash
+pip install "opencli[sandbox]"
 ```
 
 Development on Windows:
@@ -63,17 +71,19 @@ opencli
 Use `opencli --cli` for the classic line-oriented interface. The former
 `opencli --tui` flag remains accepted as a compatibility alias.
 
-The TUI streams model and tool events live, gates sensitive tools with approval
-modals, shows context and usage state, previews approved file diffs, switches
-saved models/API profiles, adds/removes GGUF and API profiles, discovers hosted
-model limits, imports prior session memory explicitly, and stores a task plan
-outside the agent-writable workspace. The agent can inspect and mark existing
-steps `completed` or `dismissed` when evidence supports it; it cannot create or
-edit plan steps. Press `Enter` or click
-Send to submit; use `Shift+Enter` for a newline. `Ctrl+Enter` remains supported
-where the terminal distinguishes it. Use `Escape` to stop, `Ctrl+P` to add a
-plan step, `Ctrl+M` for models, `Ctrl+R` for sessions, and `Ctrl+K` or Compact
-button to shorten old history.
+The keyboard-first TUI uses one full-width conversation stream with inline tool,
+ReAct, plan, thinking-summary, error, and diff cards. Sensitive actions use
+buttonless approval screens that default to denial. Context, usage, model, and
+sandbox state remain visible in compact adaptive status lines. Type `/` for
+filtered completion of existing commands; no separate UI command system exists.
+Press `Enter` to submit, `Shift+Enter` for a newline, `Escape` to stop, and
+`Ctrl+G` to resume following live output after scrolling upward. Model, session,
+plan, memory, compact, and permission workflows remain available through their
+documented slash commands.
+
+Pillow normalizes existing model-bound visual context with EXIF correction,
+RGB conversion, and bounded dimensions. The TUI intentionally has no image
+picker, image preview, or terminal-image rendering yet.
 
 Sessions have stable timestamp/UUID filenames and optional human-readable titles.
 The model may propose one short title through a validated tool; use
@@ -90,6 +100,9 @@ replace one bounded historical capsule in current chat.
 | `/context` | Show active profile, prompt breakdown, output reserve, and available input. |
 | `/usage` | Show input/output estimates or provider-reported usage for current session. |
 | `/prompt-size` | Show fixed instruction and tool-schema prompt cost. |
+| `/pwd` | Show trusted workspace root and logical current directory. |
+| `/cd PATH` | Change logical directory inside trusted workspace; does not change host process directory. |
+| `/roots` | Show filesystem roots available to the agent. |
 | `/compact`, `/compact status` | Micro-prune tool results, summarize cold history with the loaded model, and retain recent complete turns. |
 | `/compact auto on|off` | Toggle context-aware compaction before a request; default on. |
 | `/agent`, `/agent status` | Show agent runtime state. |
@@ -102,11 +115,17 @@ replace one bounded historical capsule in current chat.
 | `/tools` | List tools currently available to agent. |
 | `/tools-on`, `/tools-off` | Enable or disable agent tools. |
 | `/tool-auto on|off` | Toggle deterministic routing for local models; default off. |
+| `/plan`, `/plan add STEP`, `/plan set ID STATUS`, `/plan clear` | Inspect or manually maintain persistent session plan. Model can also create/update it through tools. |
+| `/react on|off`, `/react status` | Enable or inspect bounded model-requested ReAct tasks; default on. The model uses `start_react_task` only for genuine multi-step work. |
 | `/web on|off` | Enable or block web tools for session. |
 | `/web always` | Persist web approval for current workspace. |
 | `/web ask` | Restore web approval prompts. |
-| `/sandbox`, `/sandbox on|off` | Show or toggle Docker-only command sandbox. |
-| `!<argv>` | Run command only inside enabled Docker sandbox; shell syntax unsupported. |
+| `/sandbox docker [IMAGE]` | Select ephemeral Docker backend and optional user-chosen image. `/sandbox on` remains alias. |
+| `/sandbox e2b connect ID` | Connect user-owned E2B sandbox. API key comes only from `E2B_API_KEY`. |
+| `/sandbox e2b create [TEMPLATE] [--network]` | User explicitly creates E2B sandbox; network disabled unless requested. |
+| `/sandbox push`, `/sandbox pull` | Explicit bounded E2B upload and conflict-aware import. Secrets and remote deletions are excluded. |
+| `/sandbox status`, `/sandbox stop`, `/sandbox off` | Inspect, kill, or detach active backend. |
+| `!<argv>`, `!!<argv>` | Run read-only or write-approved argv in active sandbox; no host shell. |
 | `/permissions`, `/permissions reset` | Show or reset workspace permissions. |
 | `/history` | Show recent agent history. |
 | `/new`, `/newchat` | Start clean session. |
@@ -129,10 +148,12 @@ requests permission unless allowed for session or workspace.
 
 | Tool | Permission | Behavior |
 |---|---|---|
+| `get_working_directory`, `set_working_directory`, `list_allowed_roots` | none | Inspect or change the logical directory inside the trusted workspace. Path escape is rejected. |
 | `list_files`, `read_text_file`, `search_text`, `file_info` | `file_read` | Read trusted-workspace files only. Protected paths include `.git`, `.env`, keys, and secret-like names. |
 | `write_text_file`, `edit_text_file`, `create_directory` | `file_write` | Create or change workspace files after approval; writes are size-limited. |
 | `web_search`, `web_fetch` | `web` | Search and fetch public HTTP/S sources after approval. |
-| `run_sandboxed_command` | `command`, optional `file_write` | Run argv in Docker with no network. Workspace remains read-only unless separately approved. |
+| `get_task_plan`, `create_task_plan`, `add_task_plan_item`, `update_task_plan_item` | none | Maintain persistent plan; completion/dismissal requires evidence by instruction and loop policy. |
+| `get_sandbox_status`, `run_sandboxed_command` | `command`, `file_write` for Docker writes or any E2B command | Run argv in selected backend. E2B cannot enforce per-command read-only state, so agent commands receive extra approval. Lifecycle and host sync remain user-only. |
 
 API keys remain process-memory only. Before API requests, OpenCLI asks permission
 to transmit prompt, conversation context, tool schemas, and tool results.
@@ -152,13 +173,14 @@ Hosted output is bounded twice: provider `max_tokens` plus an independent stream
 character cap. The TUI batches streaming updates and caps rendered Markdown to
 prevent oversized responses from exhausting UI memory.
 
-## Docker sandbox
+## Docker and E2B sandboxes
 
 Install and start Docker Desktop, then run:
 
 ```text
-/sandbox on
+/sandbox docker python:3.12-slim
 !python -V
+!!python -m pytest -q
 ```
 
 Each command starts an ephemeral container with network disabled, read-only root
@@ -166,10 +188,37 @@ filesystem, dropped Linux capabilities, no privilege escalation, CPU/RAM/PID
 limits, and a read-only workspace mount by default. Docker image pulls may need
 internet access during Docker setup; sandboxed commands do not receive network.
 
+E2B uses user-controlled lifecycle and explicit transfer:
+
+```text
+# Set E2B_API_KEY in process environment first.
+/sandbox e2b connect YOUR_SANDBOX_ID
+# Or: /sandbox e2b create YOUR_TEMPLATE
+/sandbox push
+!python -m pytest -q
+/sandbox pull
+```
+
+Push/pull skip `.git`, `.opencli`, environments, keys, and secret-like files;
+enforce file/byte limits; reject local conflicts; ignore remote deletions. Agent
+may execute approved commands but cannot create, connect, stop, push, or pull a
+sandbox. Connected E2B sandboxes are not killed by `/sandbox off`; use
+`/sandbox stop` first when shutdown is wanted.
+
+## ReAct execution and plans
+
+ReAct is enabled by default for local and API models. For genuinely multi-step
+work, the model can call `start_react_task`; OpenCLI then owns the capped budget,
+repeated-action and failure guards, and all normal permission checks. It cannot
+restart a task to evade limits. Simple requests remain ordinary tool/chat turns.
+OpenCLI never requests or stores private chain-of-thought. Persistent user-visible
+task plan remains separate from loop state, so planning-only requests can produce
+detailed plans without editing files.
+
 ## Internal boundaries
 
 `main.interfaces` declares stable internal contracts for model backends, tool
-providers, permission gates, and session stores. Providers may differ, but CLI
+providers, permission gates, sessions, sandboxes, and loop controllers. Providers may differ, but CLI
 code uses those shared boundaries. New features should extend these contracts
 instead of binding UI code to a model vendor or tool implementation.
 

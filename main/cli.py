@@ -32,12 +32,18 @@ from main.permissions import (
 from main.model_registry import ModelRegistry, ModelRegistryError
 from main.api_profiles import ApiProfileRegistry
 from main.api_providers import ApiProviderError, OpenAICompatibleClient, PROVIDERS
-from main.sandbox import DockerSandbox
+from main.sandbox import SandboxManager
 from main.session_memory import SessionMemoryStore
-from main.context_accounting import ContextAccountingService, format_token_count
+from main.task_plan import TaskPlanStore
+from main.context_accounting import (
+    ContextAccountingService,
+    format_token_count,
+    tiktoken_counter,
+)
 from main.model_profiles import ModelProfileRegistry
 from main.ui_events import AgentEvent
 from main.language import language_instruction
+from main.workspace_context import WorkspaceContext
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # MODERN UI IMPORTS (Rich & Prompt Toolkit)
@@ -619,6 +625,7 @@ class OpenCLI:
         # Models may request every enabled tool. Proactive routing stays opt-in.
         self.tools_enabled = True
         self.auto_tool_routing = False
+        self.react_enabled = True
         self._placeholder_index = 0
         self.multiline_mode = False  # For large text paste
         self.model_selection_mode = "auto"
@@ -627,11 +634,12 @@ class OpenCLI:
         self.manual_model_key = None
         self.hidden_model_key = self.auto_model_key
         self.visible_model_name = "OpenCLI"
+        self.workspace_context = WorkspaceContext(Path.cwd())
         self.permission_manager = PermissionManager(
-            Path.cwd(), approval_callback=self.request_tool_permission
+            self.workspace_context.root, approval_callback=self.request_tool_permission
         )
         self.model_registry = ModelRegistry()
-        self.model_profiles = ModelProfileRegistry(Path.cwd())
+        self.model_profiles = ModelProfileRegistry(self.workspace_context.root)
         initial_profile = self.model_profiles.resolve(
             key=self.auto_model_key,
             model_id=self.MODELS["auto"][1],
@@ -644,8 +652,8 @@ class OpenCLI:
         self._api_key = None
         self._api_model_metadata = {}
         self.sandbox_enabled = False
-        self.sandbox = DockerSandbox(Path.cwd())
-        self.session_memory = SessionMemoryStore(Path.cwd())
+        self.sandbox = SandboxManager(self.workspace_context.root)
+        self.session_memory = SessionMemoryStore(self.workspace_context.root)
         self.chat_session = None
         self._active_spinner_event = None
         self._active_spinner_thread = None
@@ -672,6 +680,8 @@ class OpenCLI:
         self.engine.file_handler.permission_callback = (
             self.permission_manager.request
         )
+        self.engine.file_handler.current_path = self.workspace_context.current_directory
+        self.engine.file_handler.workspace_root = self.workspace_context.root
         return self.engine is not None
 
     def ensure_agent_runtime(self) -> bool:
@@ -685,20 +695,34 @@ class OpenCLI:
 
             if self.chat_session is None:
                 self.chat_session = self.session_memory.create()
+            if (
+                self.task_plan_store is None
+                or self.task_plan_store.path.name != f"{self.chat_session.session_id}.json"
+            ):
+                self.task_plan_store = TaskPlanStore(
+                    self.workspace_context.root, self.chat_session.session_id
+                )
+            plan_items = self.task_plan_store.load()
+            self.task_plan_context = "\n".join(
+                f"- [{item.status}] {item.text} (id: {item.id})"
+                for item in plan_items
+            )
 
             self.agent_runtime = get_agent_runtime(
                 self.engine,
-                workspace=Path.cwd(),
+                workspace=self.workspace_context.root,
                 config=RuntimeConfig(
                     session_id=self.chat_session.session_id,
                     dry_run=self.dry_run,
                     tools_enabled=self.tools_enabled,
                     auto_tool_routing=self.auto_tool_routing,
+                    react_enabled=self.react_enabled,
                 ),
                 permission_callback=self.permission_manager.request,
                 sandbox=self.sandbox if self.sandbox_enabled else None,
                 task_plan_store=self.task_plan_store,
                 session_title_callback=self._set_model_session_title,
+                workspace_context=self.workspace_context,
             )
             self.agent_runtime.set_memory_notes(self.chat_session.notes)
             return True
@@ -715,6 +739,7 @@ class OpenCLI:
             or getattr(self, "agent_runtime", None) is None
         ):
             return
+        self.chat_session.current_directory = self.workspace_context.relative_path()
         consume_archives = getattr(self.agent_runtime, "consume_tool_archives", lambda: [])
         for archive in consume_archives():
             self.session_memory.archive_tool_results(self.chat_session, archive)
@@ -896,8 +921,44 @@ class OpenCLI:
         self._save_chat_session()
         self.agent_runtime = None
         self.chat_session = self.session_memory.create()
+        self.task_plan_store = TaskPlanStore(
+            self.workspace_context.root, self.chat_session.session_id
+        )
+        self.task_plan_context = ""
         self.context_accounting.reset_usage()
         print(f"New chat: {self.chat_session.path.name}")
+
+    def working_directory_state(self) -> dict[str, object]:
+        """Return session-local safe navigation state for either UI."""
+        return self.workspace_context.state()
+
+    def _refresh_task_plan_context(self) -> list:
+        """Reload persistent plan so classic CLI and TUI share current state."""
+        if self.chat_session is None:
+            return []
+        if (
+            self.task_plan_store is None
+            or self.task_plan_store.path.name != f"{self.chat_session.session_id}.json"
+        ):
+            self.task_plan_store = TaskPlanStore(
+                self.workspace_context.root, self.chat_session.session_id
+            )
+        items = self.task_plan_store.load()
+        self.task_plan_context = "\n".join(
+            f"- [{item.status}] {item.text} (id: {item.id})" for item in items
+        )
+        return items
+
+    def change_working_directory(self, path: str) -> str:
+        """Change logical directory without mutating the host process cwd."""
+        target = self.workspace_context.set_current_directory(path)
+        if self.engine is not None:
+            self.engine.file_handler.current_path = target
+            self.engine.file_handler.workspace_root = self.workspace_context.root
+        if self.chat_session is not None:
+            self.chat_session.current_directory = self.workspace_context.relative_path()
+            self._save_chat_session()
+        return self.workspace_context.relative_path(target)
 
     def _session_transcript(self) -> str:
         if self.agent_runtime is not None:
@@ -938,6 +999,11 @@ class OpenCLI:
         self._save_chat_session()
         self.chat_session = self.session_memory.load_record(path)
         self.agent_runtime = None
+        try:
+            self.change_working_directory(self.chat_session.current_directory)
+        except ValueError:
+            self.workspace_context.set_current_directory(".")
+            self.chat_session.current_directory = "."
         if not self.ensure_agent_runtime():
             raise RuntimeError("Agent runtime unavailable")
         restored = bool(self.agent_runtime.message_count)
@@ -1150,18 +1216,24 @@ class OpenCLI:
             metadata = self.router_models()[self.mode]
         return key, model_id, backend, provider, metadata
 
-    def _tokenizer_counter(self):
+    def _tokenizer_counter(self, profile=None):
         tokenizer = getattr(self.engine, "tokenizer", None) if self.engine else None
-        if tokenizer is None or not hasattr(tokenizer, "encode"):
+        if tokenizer is not None and hasattr(tokenizer, "encode"):
+            def count(text: str) -> int:
+                try:
+                    return len(tokenizer.encode(text, add_special_tokens=False))
+                except TypeError:
+                    return len(tokenizer.encode(text))
+
+            return count
+        if profile is None:
             return None
-
-        def count(text: str) -> int:
-            try:
-                return len(tokenizer.encode(text, add_special_tokens=False))
-            except TypeError:
-                return len(tokenizer.encode(text))
-
-        return count
+        if profile.tokenizer:
+            return tiktoken_counter(profile.model_id, profile.tokenizer)
+        model_id = profile.model_id.removeprefix("openai/")
+        if self.api_provider == "openrouter" and profile.model_id.startswith("openai/"):
+            return tiktoken_counter(model_id)
+        return None
 
     def _refresh_context_profile(self):
         key, model_id, backend, provider, metadata = self._model_profile_inputs()
@@ -1172,7 +1244,7 @@ class OpenCLI:
             provider=provider,
             metadata=metadata,
         )
-        self.context_accounting.set_profile(profile, self._tokenizer_counter())
+        self.context_accounting.set_profile(profile, self._tokenizer_counter(profile))
         return profile
 
     def _context_components(self, current_prompt: str = "") -> dict:
@@ -1186,12 +1258,16 @@ class OpenCLI:
             return components
         tools = "\n".join(
             [
+                "get_working_directory", "set_working_directory", "list_allowed_roots",
                 "list_files", "read_text_file", "search_text", "file_info",
                 "write_text_file", "edit_text_file", "create_directory",
-                "web_search", "web_fetch",
+                "web_search", "web_fetch", "get_task_plan", "create_task_plan",
+                "add_task_plan_item", "update_task_plan_item",
             ]
             if self.tools_enabled else []
         )
+        if self.tools_enabled and self.sandbox_enabled:
+            tools += "\nget_sandbox_status\nrun_sandboxed_command"
         components = {
             "instructions": (
                 "OpenCLI workspace assistant. Use approved tools for workspace "
@@ -1778,15 +1854,16 @@ class OpenCLI:
 
         lower = user_input.lower().strip()
 
-        # Commands run only in an optional Docker sandbox; no host shell fallback.
+        # Commands run only in an active sandbox; no host shell fallback.
         if user_input.startswith("!"):
-            cmd = user_input[1:].strip()
+            write_access = user_input.startswith("!!")
+            cmd = user_input[2 if write_access else 1 :].strip()
             if cmd:
                 if self.dry_run:
                     print(f"{Colors.DIM}Dry-run command: {cmd}{Colors.RESET}")
                     return True
                 if not self.sandbox_enabled:
-                    print(f"{Colors.YELLOW}Host shell is disabled. Enable Docker sandbox first: /sandbox on{Colors.RESET}")
+                    print(f"{Colors.YELLOW}Host shell is disabled. Select sandbox first: /sandbox docker or /sandbox e2b connect ID{Colors.RESET}")
                     return True
                 try:
                     argv = shlex.split(cmd, posix=True)
@@ -1800,18 +1877,33 @@ class OpenCLI:
                     "command",
                     "run_sandboxed_command",
                     " ".join(argv),
-                    "Run user command in isolated Docker sandbox",
+                    "Run user command in active isolated sandbox",
                 ):
                     print(f"{Colors.YELLOW}Command permission denied.{Colors.RESET}")
                     return True
-                result = self.sandbox.run(argv)
+                if write_access and not self.permission_manager.request(
+                    "file_write",
+                    "run_sandboxed_command",
+                    " ".join(argv),
+                    "Allow sandbox command to modify project files",
+                ):
+                    print(f"{Colors.YELLOW}Sandbox write permission denied.{Colors.RESET}")
+                    return True
+                result = self.sandbox.run(
+                    argv,
+                    write_access=write_access,
+                    cwd=self.workspace_context.relative_path(),
+                )
                 if result.get("error"):
                     print(f"{Colors.YELLOW}{result['error']}{Colors.RESET}")
                 else:
                     print(result.get("output", ""), end="")
-                    print(f"{Colors.DIM}Sandbox exit: {result['exit_code']}{Colors.RESET}")
+                    print(
+                        f"{Colors.DIM}{result.get('backend', 'sandbox')} exit: "
+                        f"{result['exit_code']}{Colors.RESET}"
+                    )
             else:
-                print(f"{Colors.YELLOW}Usage: !<argv command> (e.g., !pytest -q){Colors.RESET}")
+                print(f"{Colors.YELLOW}Usage: !command (read-only) or !!command (write){Colors.RESET}")
             return True
 
         # Exit commands
@@ -1866,6 +1958,27 @@ class OpenCLI:
             self.show_prompt_size()
             return True
 
+        if lower == "/pwd":
+            state = self.working_directory_state()
+            print(f"Workspace: {state['workspace']}\nCurrent directory: {state['current_directory']}")
+            return True
+
+        if lower == "/roots":
+            state = self.working_directory_state()
+            print("Allowed roots:\n" + "\n".join(f"- {root}" for root in state["allowed_roots"]))
+            return True
+
+        if lower == "/cd" or lower.startswith("/cd "):
+            _, _, value = user_input.strip().partition(" ")
+            if not value.strip():
+                print("Usage: /cd PATH")
+                return True
+            try:
+                print(f"Current directory: {self.change_working_directory(value)}")
+            except ValueError as error:
+                print(f"Directory unchanged: {error}")
+            return True
+
         if lower == "/compact":
             self._compact_chat()
             return True
@@ -1888,25 +2001,155 @@ class OpenCLI:
                 )
             return True
 
-        if lower.startswith("/sandbox"):
-            _, _, value = lower.partition(" ")
-            if value == "on":
-                if not self.sandbox.is_available():
-                    print(f"{Colors.YELLOW}Docker is unavailable. Install/start Docker Desktop; no host-shell fallback exists.{Colors.RESET}")
+        if lower == "/plan" or lower.startswith("/plan "):
+            if self.chat_session is None:
+                self.chat_session = self.session_memory.create()
+            items = self._refresh_task_plan_context()
+            _, _, value = user_input.strip().partition(" ")
+            action, _, argument = value.partition(" ")
+            action = action.casefold()
+            try:
+                if not action or action == "show":
+                    if not items:
+                        print("Task plan empty. Ask model to plan, or use /plan add STEP.")
+                    else:
+                        print(
+                            "Task plan:\n"
+                            + "\n".join(
+                                f"- {item.id} [{item.status}] {item.text}"
+                                for item in items
+                            )
+                        )
+                elif action == "add":
+                    item = self.task_plan_store.add_item(argument)
+                    print(f"Plan item added: {item.id}")
+                elif action == "clear":
+                    self.task_plan_store.clear()
+                    print("Task plan cleared.")
+                elif action == "set":
+                    item_id, _, status = argument.partition(" ")
+                    item = self.task_plan_store.update_status(item_id, status.casefold())
+                    print(f"Plan item {item.id}: {item.status}")
                 else:
-                    self.sandbox_enabled = True
-                    self._save_chat_session()
-                    self.agent_runtime = None
-                    print("Docker sandbox enabled. Containers start only when a command is requested.")
-            elif value == "off":
-                self.sandbox_enabled = False
+                    print("Usage: /plan | /plan add STEP | /plan set ID STATUS | /plan clear")
+            except ValueError as error:
+                print(f"Plan unchanged: {error}")
+            self._refresh_task_plan_context()
+            return True
+
+        if lower.startswith("/sandbox"):
+            try:
+                parts = shlex.split(user_input)
+            except ValueError as error:
+                print(f"Invalid sandbox command: {error}")
+                return True
+            action = parts[1].casefold() if len(parts) > 1 else "status"
+            changed_backend = False
+            try:
+                if action in {"on", "docker"}:
+                    image = parts[2] if len(parts) > 2 else None
+                    result = self.sandbox.use_docker(image)
+                    if result.get("error"):
+                        print(result["error"])
+                    else:
+                        self.sandbox_enabled = True
+                        changed_backend = True
+                        print(
+                            f"Docker sandbox ready: {result['image']} "
+                            "(ephemeral, network off)."
+                        )
+                elif action == "e2b":
+                    operation = parts[2].casefold() if len(parts) > 2 else "status"
+                    if operation == "connect" and len(parts) == 4:
+                        if not self.permission_manager.request(
+                            "api", "connect_e2b", parts[3],
+                            "Connect to user-owned E2B cloud sandbox",
+                        ):
+                            print("E2B connection permission denied.")
+                            return True
+                        result = self.sandbox.connect_e2b(parts[3])
+                    elif operation == "create":
+                        allow_network = "--network" in parts[3:]
+                        template = next(
+                            (value for value in parts[3:] if value != "--network"),
+                            None,
+                        )
+                        if not self.permission_manager.request(
+                            "api", "create_e2b", template or "base",
+                            "Create user-requested E2B cloud sandbox",
+                        ):
+                            print("E2B creation permission denied.")
+                            return True
+                        result = self.sandbox.create_e2b(
+                            template, allow_network=allow_network
+                        )
+                    elif operation == "status":
+                        result = self.sandbox.status()
+                    else:
+                        print("Usage: /sandbox e2b connect ID | create [TEMPLATE] [--network]")
+                        return True
+                    self.sandbox_enabled = bool(result.get("available"))
+                    changed_backend = self.sandbox_enabled
+                    print(json.dumps(result, indent=2, default=str))
+                elif action == "push":
+                    if not self.permission_manager.request(
+                        "api", "push_e2b_workspace", str(self.workspace_context.root),
+                        "Upload bounded workspace snapshot to active E2B sandbox",
+                    ):
+                        print("E2B workspace push denied.")
+                        return True
+                    print(json.dumps(self.sandbox.push_workspace(), indent=2))
+                elif action == "pull":
+                    preview = self.sandbox.pull_workspace(apply=False)
+                    if preview.get("error"):
+                        print(preview["error"])
+                        return True
+                    changed = preview.get("changed", [])
+                    conflicts = preview.get("conflicts", [])
+                    if not changed:
+                        print(
+                            "No safe remote changes to pull."
+                            + (f" Conflicts: {', '.join(conflicts)}" if conflicts else "")
+                        )
+                        return True
+                    if not self.permission_manager.request(
+                        "file_write", "pull_e2b_workspace", ", ".join(changed),
+                        "Apply non-conflicting E2B file changes to local workspace",
+                    ):
+                        print("E2B workspace pull denied.")
+                        return True
+                    print(json.dumps(self.sandbox.pull_workspace(apply=True), indent=2))
+                elif action == "stop":
+                    print(json.dumps(self.sandbox.stop(), indent=2))
+                    self.sandbox_enabled = False
+                    changed_backend = True
+                elif action == "off":
+                    self.sandbox.disable()
+                    self.sandbox_enabled = False
+                    changed_backend = True
+                    print("Sandbox detached. Remote E2B sandbox, if any, was not killed.")
+                elif action == "status":
+                    print(json.dumps(self.sandbox.status(), indent=2, default=str))
+                else:
+                    print("Usage: /sandbox docker [IMAGE] | e2b connect ID | e2b create [TEMPLATE] [--network] | push | pull | status | stop | off")
+            except (OSError, RuntimeError, ValueError) as error:
+                print(f"Sandbox error: {error}")
+            if changed_backend:
                 self._save_chat_session()
                 self.agent_runtime = None
-                print("Docker sandbox disabled.")
-            else:
-                state = "on" if self.sandbox_enabled else "off"
-                available = "ready" if self.sandbox.is_available() else "unavailable"
-                print(f"Docker sandbox: {state} ({available})")
+            return True
+
+        if lower in {"/react", "/react status"}:
+            status = self.react_status()
+            print(json.dumps(status, indent=2))
+            return True
+
+        if lower in {"/react on", "/react off"}:
+            self.react_enabled = lower.endswith(" on")
+            self._save_chat_session()
+            self.agent_runtime = None
+            mode = "strict every-turn dispatcher" if self.react_enabled else "ordinary agent"
+            print(f"ReAct {'enabled' if self.react_enabled else 'disabled'}: {mode}.")
             return True
 
         if lower in {"/agent", "/agent status"}:
@@ -2201,6 +2444,22 @@ class OpenCLI:
         return self.load_model(self.auto_model_key, self.quant, show_picker=False)
 
     def show_help(self):
+        """Show command help from same metadata used by TUI slash completion."""
+        from main.command_registry import COMMAND_SPECS
+
+        grouped: dict[str, list] = {}
+        for spec in COMMAND_SPECS:
+            grouped.setdefault(spec.category, []).append(spec)
+        print(f"\nOpenCLI v{self.VERSION}\n")
+        for category, specs in grouped.items():
+            print(f"{category}:")
+            width = max(len(spec.usage) for spec in specs)
+            for spec in specs:
+                aliases = f" ({', '.join(spec.aliases)})" if spec.aliases else ""
+                print(f"  {spec.usage:<{width}}  {spec.description}{aliases}")
+            print()
+
+    def _show_help_legacy(self):
         """Show help with gradient model names"""
         # Only show auto profile now
         model_lines = f"    {gradient_text('auto', 'auto')}  {Colors.DIM}auto · local default{Colors.RESET}"
@@ -2238,6 +2497,9 @@ class OpenCLI:
     /context       {Colors.DIM}Show model-aware context usage{Colors.RESET}
     /usage         {Colors.DIM}Show session token usage{Colors.RESET}
     /prompt-size   {Colors.DIM}Show fixed prompt cost{Colors.RESET}
+    /pwd           {Colors.DIM}Show logical workspace directory{Colors.RESET}
+    /cd PATH       {Colors.DIM}Change directory inside trusted workspace{Colors.RESET}
+    /roots         {Colors.DIM}Show allowed filesystem roots{Colors.RESET}
     /compact       {Colors.DIM}Shrink older chat history into local memory{Colors.RESET}
     /compact status {Colors.DIM}Show compact readiness{Colors.RESET}
     /compact auto on|off {Colors.DIM}Toggle context-aware preflight compact{Colors.RESET}
@@ -2248,7 +2510,13 @@ class OpenCLI:
     /tool-auto on|off {Colors.DIM}Toggle proactive local routing (off by default){Colors.RESET}
     /history       {Colors.DIM}Show recent agent history{Colors.RESET}
     /web on|off|always|ask {Colors.DIM}Set web access and permission policy{Colors.RESET}
-    /sandbox on|off {Colors.DIM}Enable Docker-only command sandbox{Colors.RESET}
+    /plan          {Colors.DIM}Show persistent task plan; /plan add|set|clear{Colors.RESET}
+    /react on|off  {Colors.DIM}Toggle strict every-turn ReAct dispatcher; /react shows state{Colors.RESET}
+    /sandbox docker [IMAGE] {Colors.DIM}Use ephemeral local Docker backend{Colors.RESET}
+    /sandbox e2b connect ID {Colors.DIM}Use user-owned E2B sandbox{Colors.RESET}
+    /sandbox e2b create [TEMPLATE] [--network] {Colors.DIM}Create E2B sandbox{Colors.RESET}
+    /sandbox push|pull|status|stop|off {Colors.DIM}Control explicit E2B sync/lifecycle{Colors.RESET}
+    !command / !!command {Colors.DIM}Read-only / writable sandbox command{Colors.RESET}
     /permissions   {Colors.DIM}Show workspace permissions{Colors.RESET}
     /clear         {Colors.DIM}Clear screen{Colors.RESET}
     /new           {Colors.DIM}Start clean chat session{Colors.RESET}
@@ -2293,6 +2561,8 @@ class OpenCLI:
         print(f"\n{Colors.BOLD}Status:{Colors.RESET}")
         print(f"  Model: {model_name_colored}")
         print(f"  Base: {base}")
+        print(f"  Workspace: {self.workspace_context.root}")
+        print(f"  Directory: {self.workspace_context.relative_path()}")
         print(f"  Quant: {self.quant.upper()}")
         print("  KV cache: " + ("N/A" if self.mode == "api" else "Q4"))
         offload = (
@@ -2317,9 +2587,16 @@ class OpenCLI:
             "  Auto tool routing: "
             f"{'On' if self.auto_tool_routing else 'Off'}"
         )
-        sandbox_state = "On" if self.sandbox_enabled else "Off"
-        availability = "ready" if self.sandbox.is_available() else "unavailable"
-        print(f"  Docker sandbox: {sandbox_state} ({availability})")
+        sandbox = self.sandbox.status()
+        print(
+            f"  Sandbox: {sandbox.get('backend', 'none')} "
+            f"({'ready' if sandbox.get('available') else 'off'})"
+        )
+        react = self.react_status()
+        print(
+            f"  ReAct: {'On' if self.react_enabled else 'Off'} "
+            f"({react['phase']}, {react['steps']}/{react['max_steps']})"
+        )
         print(f"  Custom models: {len(self.custom_models())}/10")
         context = self._context_snapshot()
         marker = "~" if context.estimated else ""
@@ -2354,6 +2631,31 @@ class OpenCLI:
         print(f"  Always allow: {persistent}")
         print("  Reset: /permissions reset\n")
 
+    def react_status(self) -> dict:
+        """Return UI-safe current ReAct state, even before runtime creation."""
+        if self.agent_runtime is not None:
+            status = dict(self.agent_runtime.react.status())
+        else:
+            status = {
+                "enabled": self.react_enabled,
+                "requested": False,
+                "phase": "ready" if self.react_enabled else "off",
+                "goal": "",
+                "paths": [],
+                "max_steps": 10,
+                "steps": 0,
+                "failures": 0,
+                "last_tool": "",
+                "halted_reason": "",
+                "timeline": [],
+                "critique": None,
+                "single_action_per_model_step": self.react_enabled,
+            }
+        status["mode"] = (
+            "strict_every_turn" if self.react_enabled else "ordinary_agent"
+        )
+        return status
+
     def show_tools(self) -> None:
         if not self.tools_enabled:
             tools = []
@@ -2361,6 +2663,9 @@ class OpenCLI:
             tools = self.agent_runtime.available_tools
         else:
             tools = [
+                "get_working_directory",
+                "set_working_directory",
+                "list_allowed_roots",
                 "list_files",
                 "read_text_file",
                 "search_text",
@@ -2370,7 +2675,15 @@ class OpenCLI:
                 "create_directory",
                 "web_search",
                 "web_fetch",
+                "get_task_plan",
+                "create_task_plan",
+                "add_task_plan_item",
+                "update_task_plan_item",
             ]
+            if self.react_enabled:
+                tools.extend(["react_dispatch", "critique_and_plan"])
+            if self.sandbox_enabled:
+                tools.extend(["get_sandbox_status", "run_sandboxed_command"])
         print(f"\n{Colors.BOLD}Tools:{Colors.RESET}")
         for name in [*tools, "!<command>"]:
             print(f"  {name}")
@@ -2392,12 +2705,19 @@ class OpenCLI:
             f"  Messages: "
             f"{self.agent_runtime.message_count if self.agent_runtime else 0}"
         )
-        print(f"  Workspace: {Path.cwd()}")
+        print(f"  Workspace: {self.workspace_context.root}")
+        print(f"  Directory: {self.workspace_context.relative_path()}")
         print(
             f"  Web: {'on' if self.permission_manager.web_enabled else 'off'}"
         )
         print(f"  Tools: {'on' if self.tools_enabled else 'off'}")
         print(f"  Auto route: {'on' if self.auto_tool_routing else 'off'}")
+        react = self.react_status()
+        print(
+            f"  ReAct: {'on' if self.react_enabled else 'off'} "
+            f"({react['phase']}, {react['steps']}/{react['max_steps']})"
+        )
+        print(f"  Sandbox: {self.sandbox.backend}")
         print()
 
     def stream_turn(self, user_input: str, think_mode: bool = False):
@@ -2408,7 +2728,6 @@ class OpenCLI:
                 "llama.cpp server is stopped. Use /model auto to restart it.",
             )
             return
-
         if not self.ensure_engine():
             yield AgentEvent("error", "Model engine is unavailable.")
             return
@@ -2431,6 +2750,8 @@ class OpenCLI:
             )
             return
 
+        if self.chat_session is not None:
+            self._refresh_task_plan_context()
         model_input = self._model_input(user_input)
         if self.task_plan_context:
             model_input = (
@@ -2476,6 +2797,7 @@ class OpenCLI:
             for chunk in stream:
                 event = AgentEvent.from_chunk(chunk)
                 if event.type == "thinking":
+                    yield event
                     continue
                 if event.type == "token":
                     if event.content.strip() in {"assistant", "user", "system"}:
@@ -2511,6 +2833,7 @@ class OpenCLI:
                     ),
                 )
             self._save_chat_session()
+            self._refresh_task_plan_context()
 
     def query(self, user_input: str, think_mode: bool = False):
         """Render shared agent events in the classic terminal interface."""
@@ -2536,6 +2859,11 @@ class OpenCLI:
                     renderer.append(event.content)
                 elif event.type == "status":
                     print(f"\n{Colors.DIM}{event.content}{Colors.RESET}")
+                elif event.type == "react_state":
+                    print(
+                        f"\n{Colors.DIM}ReAct: "
+                        f"{event.summary or event.content}{Colors.RESET}"
+                    )
                 elif event.type == "tool":
                     target = (
                         event.arguments.get("query")
@@ -2555,6 +2883,8 @@ class OpenCLI:
                 elif event.type == "file_change":
                     marker = "dry-run " if event.details.get("dry_run") else ""
                     print(f"{Colors.DIM}{marker}Changed: {event.summary}{Colors.RESET}")
+                elif event.type == "task_plan":
+                    print(f"{Colors.DIM}Plan: {event.content}{Colors.RESET}")
                 elif event.type == "error":
                     print(f"\n{Colors.RED}Error: {event.content}{Colors.RESET}")
         finally:

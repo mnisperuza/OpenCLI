@@ -119,3 +119,17 @@ class SessionMemoryStoreTests(TestCase):
         self.assertEqual(restored.compactions[0].summary, "Goal: fix preview")
         self.assertEqual(restored.tool_archives[0].content, "tool payload")
         self.assertIn("SESSION CAPSULE: Fix preview crash", capsule)
+
+    def test_record_round_trip_preserves_logical_current_directory(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            record = store.create()
+            record.current_directory = "src/auth"
+            store.save(record, "USER: inspect auth")
+
+            restored = store.load_record(record.path)
+
+        self.assertEqual(restored.current_directory, "src/auth")

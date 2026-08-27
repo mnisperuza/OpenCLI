@@ -3,12 +3,13 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import patch
-from textual.widgets import Collapsible
+from textual.containers import VerticalScroll
+from textual.widgets import Button, Collapsible, Footer, Header, Markdown, OptionList, Static
 
 from main.cli import OpenCLI, main
 from main.session_memory import SessionMemoryStore
-from main.task_plan import TaskPlanStore
-from main.tui import ChoiceScreen, FormScreen, OpenCLITui, PermissionScreen
+from main.task_plan import TaskPlanItem, TaskPlanStore
+from main.tui import ChoiceScreen, ConfirmScreen, FormScreen, OpenCLITui, PermissionScreen
 from main.permissions import PermissionDecision, PermissionRequest
 from main.ui_events import AgentEvent
 
@@ -39,6 +40,72 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 self.assertEqual(app._assistant_text, "Hello")
                 self.assertEqual(app._events[-1].type, "tool_result")
 
+    async def test_react_state_updates_one_progress_card(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._begin_assistant()
+                app._handle_event(
+                    AgentEvent("react_state", details={"phase": "plan", "steps": 0, "max_steps": 10})
+                )
+                app._handle_event(
+                    AgentEvent("react_state", details={"phase": "act", "steps": 1, "max_steps": 10})
+                )
+                await pilot.pause()
+                cards = list(app.query(".react-card"))
+                self.assertEqual(len(cards), 1)
+                self.assertIn("act", str(cards[0].render()))
+
+    async def test_final_response_mounts_after_tool_trace(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._begin_assistant()
+                app._handle_event(AgentEvent("token", "Planning"))
+                first_response = app._assistant
+                app._handle_event(
+                    AgentEvent("tool_result", name="list_files", summary="3 files")
+                )
+                app._handle_event(AgentEvent("token", "Final answer"))
+                await pilot.pause()
+
+                timeline = app.query_one("#timeline", VerticalScroll)
+                children = list(timeline.children)
+                self.assertIsInstance(first_response, Markdown)
+                self.assertIsInstance(children[-2], Static)
+                self.assertIsInstance(children[-1], Markdown)
+                self.assertIsNot(children[-1], first_response)
+                self.assertEqual(app._assistant_segment_text, "Final answer")
+                self.assertEqual(app._assistant_text, "PlanningFinal answer")
+
+    async def test_user_scroll_disables_follow_until_latest_action(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test(size=(100, 24)) as pilot:
+                for index in range(40):
+                    app._mount_message(f"History {index}", "event-card")
+                await pilot.pause()
+                timeline = app.query_one("#timeline", VerticalScroll)
+                timeline.scroll_home(animate=False)
+                await pilot.pause()
+
+                app._begin_assistant()
+                app._handle_event(AgentEvent("token", "Streaming output"))
+                await pilot.pause()
+
+                self.assertFalse(app._follow_output)
+                self.assertEqual(timeline.scroll_y, 0)
+                app.action_follow_latest()
+                await pilot.pause()
+                self.assertTrue(app._follow_output)
+                self.assertGreater(timeline.scroll_y, 0)
+
     async def test_file_preview_treats_code_as_text_not_markup(self):
         with TemporaryDirectory() as directory:
             cli = OpenCLI(dry_run=True)
@@ -62,6 +129,13 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 preview.collapsed = False
                 await pilot.pause()
                 self.assertFalse(preview.collapsed)
+                self.assertTrue(preview.has_class("change-card"))
+
+    def test_diff_preview_uses_line_backgrounds(self):
+        preview = OpenCLITui._diff_preview("+added\n-removed\n context\n")
+        styles = [str(span.style) for span in preview.spans]
+        self.assertTrue(any("on #10261d" in style for style in styles))
+        self.assertTrue(any("on #2a1419" in style for style in styles))
 
     async def test_permission_escape_denies(self):
         with TemporaryDirectory() as directory:
@@ -77,15 +151,55 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 await pilot.pause()
             self.assertEqual(decisions, [PermissionDecision.DENY])
 
-    async def test_narrow_terminal_hides_side_panes(self):
+    async def test_buttonless_permission_defaults_to_deny_on_enter(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            decisions = []
+            request = PermissionRequest("file_write", "edit", "a.py", "test", Path.cwd())
+            async with app.run_test() as pilot:
+                app.push_screen(PermissionScreen(request), decisions.append)
+                await pilot.pause()
+                self.assertEqual(len(app.screen.query(Button)), 0)
+                await pilot.press("enter")
+                await pilot.pause()
+            self.assertEqual(decisions, [PermissionDecision.DENY])
+
+    async def test_buttonless_form_and_confirmation_use_keyboard(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            forms = []
+            confirms = []
+            async with app.run_test() as pilot:
+                app.push_screen(FormScreen("Profile", [("name", "Name", "Open", False)]), forms.append)
+                await pilot.pause()
+                self.assertEqual(len(app.screen.query(Button)), 0)
+                await pilot.press("ctrl+enter")
+                await pilot.pause()
+                app.push_screen(ConfirmScreen("Remove", "Remove profile?"), confirms.append)
+                await pilot.pause()
+                self.assertEqual(len(app.screen.query(Button)), 0)
+                await pilot.press("enter")
+                await pilot.pause()
+            self.assertEqual(forms, [{"name": "Open"}])
+            self.assertEqual(confirms, [False])
+
+    async def test_single_stream_has_no_side_panes_or_persistent_buttons(self):
         with TemporaryDirectory() as directory:
             cli = OpenCLI(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
             app = OpenCLITui(cli, state_root=Path(directory) / "plans")
             async with app.run_test(size=(70, 28)) as pilot:
                 await pilot.pause()
-                self.assertEqual(app.query_one("#plan-pane").styles.display, "none")
-                self.assertEqual(app.query_one("#inspector-pane").styles.display, "none")
+                self.assertEqual(len(app.query("#plan-pane")), 0)
+                self.assertEqual(len(app.query("#inspector-pane")), 0)
+                self.assertEqual(len(app.query(Button)), 0)
+                self.assertEqual(len(app.query(Header)), 0)
+                self.assertEqual(len(app.query(Footer)), 0)
+                self.assertIn("ctx", str(app.query_one("#status-line").render()))
 
     async def test_model_manager_exposes_profile_crud_inside_tui(self):
         with TemporaryDirectory() as directory:
@@ -104,7 +218,7 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 await pilot.pause()
                 self.assertIsInstance(app.screen, FormScreen)
 
-    async def test_enter_and_send_button_submit_while_shift_enter_adds_line(self):
+    async def test_enter_submits_while_shift_enter_adds_line(self):
         with TemporaryDirectory() as directory:
             cli = OpenCLI(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
@@ -128,9 +242,72 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                     self.assertIn("\n", prompt.text)
 
                     prompt.text = "second"
-                    await pilot.click("#send-button")
+                    await pilot.press("enter")
                     await app.workers.wait_for_complete()
                     self.assertEqual(cli.stream_turn.call_count, 2)
+
+    async def test_slash_autocomplete_filters_and_completes_existing_command(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                prompt = app.query_one("#prompt")
+                prompt.text = "/cont"
+                await pilot.pause()
+                suggestions = app.query_one("#command-suggestions", OptionList)
+                self.assertTrue(suggestions.has_class("visible"))
+                self.assertEqual(str(suggestions.highlighted_option.id), "/context")
+                await pilot.press("tab")
+                await pilot.pause()
+                self.assertEqual(prompt.text, "/context")
+                self.assertFalse(suggestions.has_class("visible"))
+
+    async def test_thinking_updates_one_collapsed_provider_summary(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._begin_assistant()
+                app._handle_event(AgentEvent("thinking", "Checking constraints. "))
+                app._handle_event(AgentEvent("thinking", "Comparing evidence."))
+                await pilot.pause()
+                cards = list(app.query(".thinking-card"))
+                self.assertEqual(len(cards), 1)
+                self.assertTrue(cards[0].collapsed)
+                self.assertIn("Checking constraints", app._thinking_text)
+                self.assertIn("Comparing evidence", app._thinking_text)
+
+    async def test_plan_is_one_inline_card(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app.plan_items = [TaskPlanItem("one", "Inspect workspace", "in_progress")]
+                app._refresh_plan()
+                app.plan_items.append(TaskPlanItem("two", "Run tests", "pending"))
+                app._refresh_plan()
+                await pilot.pause()
+                cards = list(app.query(".react-card"))
+                self.assertEqual(len(cards), 1)
+                rendered = str(cards[0].render())
+                self.assertIn("Inspect workspace", rendered)
+                self.assertIn("Run tests", rendered)
+
+    async def test_timeline_mounts_are_windowed_for_long_sessions(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                for index in range(app.MAX_MOUNTED_WIDGETS + 20):
+                    app._mount_message(f"event {index}", "event-card")
+                await pilot.pause()
+                timeline = app.query_one("#timeline", VerticalScroll)
+                self.assertLessEqual(len(timeline.children), app.MAX_MOUNTED_WIDGETS)
+                self.assertTrue(app._history_windowed)
 
 
 class TuiCommandTests(TestCase):

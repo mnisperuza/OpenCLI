@@ -15,18 +15,18 @@ from typing import TYPE_CHECKING
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import (
-    Button, Collapsible, Footer, Header, Input, Label, ListItem, ListView,
-    Markdown, OptionList, RichLog, Static, TextArea,
+    Collapsible, Input, Label, Markdown, OptionList, Static, TextArea,
 )
 from textual.widgets.option_list import Option
 from rich.text import Text
 
+from main.command_registry import match_commands
 from main.permissions import PermissionDecision, PermissionRequest
-from main.task_plan import PLAN_STATUSES, TaskPlanItem, TaskPlanStore
+from main.task_plan import TaskPlanItem, TaskPlanStore
 from main.ui_events import AgentEvent
 
 if TYPE_CHECKING:
@@ -51,20 +51,21 @@ class PermissionScreen(ModalScreen[PermissionDecision]):
                 f"Target: {self.request.target}\n\nReason: {self.request.reason}",
                 id="permission-details",
             )
-            with Horizontal(classes="dialog-actions"):
-                yield Button("Allow once", id="allow-once", variant="primary")
-                yield Button("Session", id="allow-session")
-                yield Button("Always", id="always-allow")
-                yield Button("Deny", id="deny", variant="error")
+            yield OptionList(
+                Option("Deny", id=PermissionDecision.DENY.value),
+                Option("Allow once", id=PermissionDecision.ALLOW_ONCE.value),
+                Option("Allow for session", id=PermissionDecision.ALLOW_SESSION.value),
+                Option("Always allow in workspace", id=PermissionDecision.ALWAYS_ALLOW.value),
+                id="permission-actions",
+            )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        decisions = {
-            "allow-once": PermissionDecision.ALLOW_ONCE,
-            "allow-session": PermissionDecision.ALLOW_SESSION,
-            "always-allow": PermissionDecision.ALWAYS_ALLOW,
-            "deny": PermissionDecision.DENY,
-        }
-        self.dismiss(decisions[event.button.id or "deny"])
+    def on_mount(self) -> None:
+        actions = self.query_one("#permission-actions", OptionList)
+        actions.highlighted = 0
+        actions.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(PermissionDecision(str(event.option.id)))
 
     def action_deny(self) -> None:
         self.dismiss(PermissionDecision.DENY)
@@ -108,6 +109,7 @@ class TextualPermissionBroker:
 
 
 class TextPromptScreen(ModalScreen[str | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
     def __init__(
         self,
         title: str,
@@ -130,9 +132,7 @@ class TextPromptScreen(ModalScreen[str | None]):
                 password=self.password,
                 id="dialog-input",
             )
-            with Horizontal(classes="dialog-actions"):
-                yield Button("Save", id="save", variant="primary")
-                yield Button("Cancel", id="cancel")
+            yield Static("Enter save · Esc cancel", classes="dialog-help")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
@@ -140,12 +140,12 @@ class TextPromptScreen(ModalScreen[str | None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self.dismiss(event.value.strip() or None)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        value = self.query_one(Input).value.strip() if event.button.id == "save" else ""
-        self.dismiss(value or None)
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ChoiceScreen(ModalScreen[str | None]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
     def __init__(self, title: str, choices: list[tuple[str, str]]) -> None:
         super().__init__()
         self.dialog_title = title
@@ -158,16 +158,17 @@ class ChoiceScreen(ModalScreen[str | None]):
                 *[Option(label, id=value) for value, label in self.choices],
                 id="choice-list",
             )
-            yield Button("Cancel", id="cancel")
+            yield Static("Enter select · Esc cancel", classes="dialog-help")
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.dismiss(str(event.option.id))
 
-    def on_button_pressed(self, _event: Button.Pressed) -> None:
+    def action_cancel(self) -> None:
         self.dismiss(None)
 
 
 class ConfirmScreen(ModalScreen[bool]):
+    BINDINGS = [("escape", "cancel", "Cancel")]
     def __init__(self, title: str, message: str) -> None:
         super().__init__()
         self.dialog_title = title
@@ -177,16 +178,31 @@ class ConfirmScreen(ModalScreen[bool]):
         with Vertical(id="confirm-dialog"):
             yield Label(self.dialog_title, classes="dialog-title")
             yield Static(self.message)
-            with Horizontal(classes="dialog-actions"):
-                yield Button("Confirm", id="confirm", variant="error")
-                yield Button("Cancel", id="cancel")
+            yield OptionList(
+                Option("Cancel", id="cancel"),
+                Option("Confirm", id="confirm"),
+                id="confirm-actions",
+            )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "confirm")
+    def on_mount(self) -> None:
+        actions = self.query_one("#confirm-actions", OptionList)
+        actions.highlighted = 0
+        actions.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id == "confirm")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class FormScreen(ModalScreen[dict[str, str] | None]):
     """Small reusable Textual form; validation remains in domain registries."""
+
+    BINDINGS = [
+        ("ctrl+enter", "save", "Save"),
+        ("escape", "cancel", "Cancel"),
+    ]
 
     def __init__(
         self,
@@ -203,23 +219,21 @@ class FormScreen(ModalScreen[dict[str, str] | None]):
             for name, label, default, password in self.fields:
                 yield Label(label, classes="form-label")
                 yield Input(value=default, password=password, id=f"form-{name}")
-            with Horizontal(classes="dialog-actions"):
-                yield Button("Save", id="save", variant="primary")
-                yield Button("Cancel", id="cancel")
+            yield Static("Ctrl+Enter save · Esc cancel", classes="dialog-help")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id != "save":
-            self.dismiss(None)
-            return
+    def action_save(self) -> None:
         self.dismiss(
             {
                 name: self.query_one(f"#form-{name}", Input).value.strip()
                 for name, *_ in self.fields
             }
         )
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class PromptTextArea(TextArea):
@@ -228,6 +242,22 @@ class PromptTextArea(TextArea):
     def on_key(self, event: Key) -> None:
         # Many terminals encode Ctrl+Enter as Enter or Ctrl+J. Enter therefore
         # submits consistently; Shift+Enter remains TextArea's newline action.
+        if self.app.command_suggestions_visible:
+            if event.key in {"up", "down"}:
+                event.prevent_default()
+                event.stop()
+                self.app.move_command_selection(-1 if event.key == "up" else 1)
+                return
+            if event.key in {"tab", "enter", "ctrl+enter", "ctrl+j"}:
+                event.prevent_default()
+                event.stop()
+                self.app.complete_selected_command()
+                return
+            if event.key == "escape":
+                event.prevent_default()
+                event.stop()
+                self.app.hide_command_suggestions()
+                return
         if event.key == "shift+enter":
             event.prevent_default()
             event.stop()
@@ -243,47 +273,64 @@ class OpenCLITui(App[None]):
     TITLE = "OpenCLI"
     SUB_TITLE = "Agent workspace"
     MAX_RENDERED_RESPONSE_CHARS = 96_000
+    MAX_MOUNTED_WIDGETS = 240
     CSS = """
-    Screen { background: #0d1113; color: #d5dcda; }
-    #status-line { height: 3; padding: 1 2; background: #151c1e; color: #b9d8c2; }
-    #workspace { height: 1fr; }
-    #plan-pane { width: 26; border-right: solid #344a4e; padding: 1; }
-    #timeline { width: 1fr; padding: 1 2; }
-    #inspector-pane { width: 36; border-left: solid #344a4e; padding: 1; }
-    .pane-title, .dialog-title { color: #b9d8c2; text-style: bold; margin-bottom: 1; }
-    .user-message { background: #172226; border-left: thick #6b9785; padding: 1; margin: 1 0; }
-    .assistant-message { padding: 1; margin-bottom: 1; }
-    .event-card { margin: 0 0 1 1; color: #aeb8b6; }
-    #plan-list { height: 1fr; }
-    #plan-help, #inspector-help { color: #7f8b89; height: auto; }
-    #inspector { height: 1fr; border: round #344a4e; padding: 1; }
-    #activity { height: 1; color: #d9c37a; padding: 0 2; }
-    #prompt { height: 7; border: round #547a70; margin: 0 1; }
-    TextArea:focus { border: round #9bd2bd; }
-    #toolbar { height: 3; padding: 0 1; }
-    #toolbar Button { margin-right: 1; min-width: 12; }
-    #composer { height: 8; }
-    #prompt { width: 1fr; }
-    #send-button { width: 12; height: 5; margin: 1 1 0 0; }
+    Screen { background: #080b0d; color: #c8d0d0; }
+    Screen.reduced-color { background: black; color: white; }
+    Screen.reduced-color #identity, Screen.reduced-color #status-line { background: #080808; }
+    #identity { height: 1; padding: 0 2; background: #0c1114; color: #8aa19d; text-style: bold; }
+    #status-line {
+        height: 1; padding: 0 2; background: #0c1114; color: #657673;
+    }
+    #timeline { width: 1fr; height: 1fr; padding: 1 3 2 3; background: #080b0d; }
+    .pane-title, .dialog-title { color: #78bda8; text-style: bold; margin-bottom: 1; }
+    .user-message {
+        background: #111a1e; color: #e0e6e5; border-left: thick #58ad94;
+        padding: 1 2; margin: 1 0;
+    }
+    .assistant-message { color: #d2d9d8; padding: 1 2; margin-bottom: 1; }
+    .event-card {
+        background: #0d1316; color: #82908f; border-left: tall #26363a;
+        padding: 0 1; margin: 0 0 1 1;
+    }
+    .status-card { color: #8b9c9a; }
+    .react-card { background: #10171a; color: #75bda8; border-left: tall #397d69; }
+    .tool-card { background: #101519; color: #9aaba9; border-left: tall #41606a; }
+    .result-card { color: #78aa90; border-left: tall #365f4a; }
+    .change-card { background: #0d1514; color: #8ebfaf; border-left: tall #4a8b74; }
+    .thinking-card { background: #15130f; color: #c8ae70; border-left: tall #856b36; }
+    .error-card { background: #1c1013; color: #e18b96; border-left: tall #9d4654; }
+    #activity { height: 1; background: #0d1215; color: #657371; padding: 0 2; }
+    #activity.busy { background: #17150f; color: #d0b46f; text-style: bold; }
+    #activity.ready { color: #66847b; }
+    #command-suggestions {
+        display: none; height: auto; max-height: 10; margin: 0 2;
+        background: #10171a; border: round #31534d;
+    }
+    #command-suggestions.visible { display: block; }
+    #command-suggestions > .option-list--option { color: #9aa9a6; }
+    #command-suggestions > .option-list--option-highlighted {
+        background: #183129; color: #dce7e3; text-style: bold;
+    }
+    #composer-shell { height: auto; background: #090d0f; border-top: solid #1b272a; }
+    #prompt { height: 6; background: #0c1114; border: round #31534d; margin: 0 1; padding: 0 1; }
+    TextArea:focus { border: round #58ad94; }
+    #prompt-help { height: 1; padding: 0 2; color: #53615f; }
     ModalScreen { align: center middle; background: rgba(0, 0, 0, 0.65); }
     #permission-dialog, #text-dialog, #choice-dialog, #confirm-dialog, #form-dialog {
         width: 72; max-width: 92%; height: auto; max-height: 85%;
-        border: round #6b9785; background: #151c1e; padding: 1 2;
+        border: round #477c6d; background: #101619; padding: 1 2;
     }
     #form-dialog { width: 80; height: 90%; }
-    .form-label { color: #aeb8b6; margin-top: 1; }
+    .form-label { color: #9ba9a7; margin-top: 1; }
     #permission-details { height: auto; }
     #choice-list { height: 18; }
-    .dialog-actions { height: 3; align-horizontal: right; margin-top: 1; }
-    .dialog-actions Button { margin-left: 1; }
+    #permission-actions, #confirm-actions { height: auto; max-height: 10; margin-top: 1; }
+    .dialog-help { height: 1; color: #667572; margin-top: 1; }
     """
     BINDINGS = [
-        ("ctrl+enter", "submit", "Send"), ("escape", "stop", "Stop"),
-        ("ctrl+l", "clear_timeline", "Clear view"), ("ctrl+p", "add_plan", "Add plan"),
-        ("ctrl+d", "cycle_plan", "Plan status"), ("ctrl+e", "edit_plan", "Edit plan"),
-        ("delete", "delete_plan", "Delete plan"), ("alt+up", "plan_up", "Plan up"),
-        ("alt+down", "plan_down", "Plan down"), ("ctrl+m", "models", "Models"),
-        ("ctrl+r", "sessions", "Sessions"), ("ctrl+k", "compact", "Compact"),
+        ("escape", "stop", "Stop"),
+        ("ctrl+g", "follow_latest", "Latest"),
         ("ctrl+q", "quit", "Quit"),
     ]
 
@@ -300,8 +347,21 @@ class OpenCLITui(App[None]):
         self._busy = False
         self._assistant: Markdown | None = None
         self._assistant_text = ""
+        self._assistant_segment_text = ""
         self._response_render_truncated = False
+        self._follow_output = True
         self._events: list[AgentEvent] = []
+        self._react_card: Static | None = None
+        self._plan_card: Static | None = None
+        self._thinking_card: Collapsible | None = None
+        self._thinking_body: Static | None = None
+        self._thinking_text = ""
+        self._activity_message = "Ready"
+        self._busy_started = 0.0
+        self._layout_width = 120
+        self._command_matches = ()
+        self._suppress_suggestions_once = False
+        self._history_windowed = False
         self.permission_broker = TextualPermissionBroker(self)
         self.plan_store: TaskPlanStore | None = None
         self.plan_items: list[TaskPlanItem] = []
@@ -309,35 +369,25 @@ class OpenCLITui(App[None]):
         self._pending_api_key = ""
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
-        yield Static(id="status-line")
-        with Horizontal(id="workspace"):
-            with Vertical(id="plan-pane"):
-                yield Label("TASK PLAN", classes="pane-title")
-                yield ListView(id="plan-list")
-                yield Static("Ctrl+P add · Ctrl+D advance", id="plan-help")
-            yield VerticalScroll(id="timeline")
-            with Vertical(id="inspector-pane"):
-                yield Label("INSPECTOR", classes="pane-title")
-                yield RichLog(id="inspector", wrap=True, markup=False)
-                yield Static("Latest tool, result, or diff", id="inspector-help")
-        yield Static("Ready", id="activity")
-        with Horizontal(id="toolbar"):
-            yield Button("Models", id="models-button")
-            yield Button("Sessions", id="sessions-button")
-            yield Button("Compact", id="compact-button")
-            yield Button("Add plan", id="plan-button")
-            yield Button("Clear", id="clear-button")
-        with Horizontal(id="composer"):
+        yield Static("OpenCLI", id="identity")
+        yield VerticalScroll(id="timeline")
+        with Vertical(id="composer-shell"):
+            yield OptionList(id="command-suggestions")
+            yield Static("Ready", id="activity")
             yield PromptTextArea(id="prompt")
-            yield Button("Send", id="send-button", variant="primary")
-        yield Footer()
+            yield Static(
+                "/ commands · Enter send · Shift+Enter newline · Esc stop",
+                id="prompt-help",
+            )
+            yield Static(id="status-line")
 
     def on_mount(self) -> None:
         if self.cli.chat_session is None:
             self.cli.chat_session = self.cli.session_memory.create()
         self.plan_store = TaskPlanStore(
-            Path.cwd(), self.cli.chat_session.session_id, root=self.state_root
+            self.cli.workspace_context.root,
+            self.cli.chat_session.session_id,
+            root=self.state_root,
         )
         self.cli.task_plan_store = self.plan_store
         self.plan_items = self.plan_store.load()
@@ -345,12 +395,15 @@ class OpenCLITui(App[None]):
             self.cli.agent_runtime.task_plan_store = self.plan_store
         self._sync_plan_context()
         self.cli.permission_manager.approval_callback = self.permission_broker.request
+        if getattr(self.console, "color_system", None) in {None, "standard", "windows"}:
+            self.screen.add_class("reduced-color")
         self._mount_message(
-            "OpenCLI agent workspace\nCtrl+Enter sends. Tools and permissions remain workspace-scoped.",
+            "OpenCLI agent workspace\nType / for commands. Tools and permissions remain workspace-scoped.",
             "assistant-message",
         )
         self._refresh_plan()
         self._refresh_state()
+        self.set_interval(0.25, self._refresh_activity_clock)
         self.query_one("#prompt", PromptTextArea).focus()
         if self.api_start:
             self.call_after_refresh(self._start_default_api)
@@ -360,10 +413,8 @@ class OpenCLITui(App[None]):
         self.cli._save_chat_session()
 
     def on_resize(self, event) -> None:
-        plan = self.query_one("#plan-pane", Vertical)
-        inspector = self.query_one("#inspector-pane", Vertical)
-        plan.styles.display = "none" if event.size.width < 105 else "block"
-        inspector.styles.display = "none" if event.size.width < 78 else "block"
+        self._layout_width = event.size.width
+        self._refresh_state()
 
     def action_submit(self) -> None:
         if self._busy:
@@ -372,6 +423,7 @@ class OpenCLITui(App[None]):
         message = prompt.text.strip()
         if not message:
             return
+        self.hide_command_suggestions()
         prompt.text = ""
         if message.lower() in {"/model", "/models"}:
             self.action_models()
@@ -391,7 +443,7 @@ class OpenCLITui(App[None]):
         if message.lower() == "/api-del":
             self.action_remove_api()
             return
-        if message.lower() in {"/sessions", "/memory"}:
+        if message.lower() == "/memory":
             self.action_sessions()
             return
         if message.lower() in {"/clear", "/cls"}:
@@ -400,18 +452,74 @@ class OpenCLITui(App[None]):
         self._mount_message(f"You\n{message}", "user-message")
         self._run_message(message)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        actions = {
-            "send-button": self.action_submit,
-            "models-button": self.action_models,
-            "sessions-button": self.action_sessions,
-            "compact-button": self.action_compact,
-            "plan-button": self.action_add_plan,
-            "clear-button": self.action_clear_timeline,
-        }
-        action = actions.get(event.button.id or "")
-        if action:
-            action()
+    @property
+    def command_suggestions_visible(self) -> bool:
+        try:
+            return self.query_one("#command-suggestions", OptionList).has_class("visible")
+        except Exception:
+            return False
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id != "prompt":
+            return
+        if self._suppress_suggestions_once:
+            self._suppress_suggestions_once = False
+            self.hide_command_suggestions()
+            return
+        text = event.text_area.text.strip()
+        if not text.startswith("/") or "\n" in text:
+            self.hide_command_suggestions()
+            return
+        self._command_matches = match_commands(text)
+        suggestions = self.query_one("#command-suggestions", OptionList)
+        suggestions.clear_options()
+        suggestions.add_options(
+            [
+                Option(f"{spec.usage}\n  {spec.description}", id=spec.command)
+                for spec in self._command_matches
+            ]
+        )
+        if self._command_matches:
+            suggestions.highlighted = 0
+            suggestions.add_class("visible")
+        else:
+            suggestions.remove_class("visible")
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id == "command-suggestions":
+            self.complete_selected_command()
+
+    def move_command_selection(self, offset: int) -> None:
+        suggestions = self.query_one("#command-suggestions", OptionList)
+        if offset < 0:
+            suggestions.action_cursor_up()
+        else:
+            suggestions.action_cursor_down()
+
+    def complete_selected_command(self) -> None:
+        suggestions = self.query_one("#command-suggestions", OptionList)
+        option = suggestions.highlighted_option
+        if option is None:
+            self.hide_command_suggestions()
+            return
+        spec = next(
+            (item for item in self._command_matches if item.command == str(option.id)),
+            None,
+        )
+        if spec is None:
+            return
+        prompt = self.query_one("#prompt", PromptTextArea)
+        self._suppress_suggestions_once = True
+        prompt.text = spec.completion
+        prompt.move_cursor((0, len(spec.completion)))
+        prompt.focus()
+        self.hide_command_suggestions()
+
+    def hide_command_suggestions(self) -> None:
+        try:
+            self.query_one("#command-suggestions", OptionList).remove_class("visible")
+        except Exception:
+            pass
 
     def action_compact(self) -> None:
         if not self._busy:
@@ -419,79 +527,21 @@ class OpenCLITui(App[None]):
 
     def action_clear_timeline(self) -> None:
         self.query_one("#timeline", VerticalScroll).remove_children()
+        self._react_card = None
+        self._plan_card = None
+        self._thinking_card = None
+        self._thinking_body = None
+        self._history_windowed = False
+
+    def action_follow_latest(self) -> None:
+        """Resume live-output following after inspecting older content."""
+        self._follow_output = True
+        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def action_stop(self) -> None:
         if self._busy:
             self.cli._request_generation_stop()
             self.query_one("#activity", Static).update("Stopping generation…")
-
-    def action_add_plan(self) -> None:
-        self.push_screen(TextPromptScreen("Add task-plan item", "One concrete step"), self._add_plan_item)
-
-    def _add_plan_item(self, text: str | None) -> None:
-        if text and self.plan_store:
-            TaskPlanStore.add(self.plan_items, text)
-            self.plan_store.save(self.plan_items)
-            self._sync_plan_context()
-            self._refresh_plan()
-
-    def action_cycle_plan(self) -> None:
-        view = self.query_one("#plan-list", ListView)
-        if view.index is None or not 0 <= view.index < len(self.plan_items):
-            return
-        item = self.plan_items[view.index]
-        item.status = PLAN_STATUSES[(PLAN_STATUSES.index(item.status) + 1) % len(PLAN_STATUSES)]
-        if self.plan_store:
-            self.plan_store.save(self.plan_items)
-        self._sync_plan_context()
-        self._refresh_plan(view.index)
-
-    def action_edit_plan(self) -> None:
-        index = self._selected_plan_index()
-        if index is None:
-            return
-        self.push_screen(
-            TextPromptScreen("Edit task-plan item", value=self.plan_items[index].text),
-            lambda text: self._edit_plan_item(index, text),
-        )
-
-    def _edit_plan_item(self, index: int, text: str | None) -> None:
-        if not text or not 0 <= index < len(self.plan_items):
-            return
-        self.plan_items[index].text = " ".join(text.split())
-        self._save_plan(index)
-
-    def action_delete_plan(self) -> None:
-        index = self._selected_plan_index()
-        if index is not None:
-            self.plan_items.pop(index)
-            self._save_plan(min(index, len(self.plan_items) - 1))
-
-    def action_plan_up(self) -> None:
-        self._move_plan(-1)
-
-    def action_plan_down(self) -> None:
-        self._move_plan(1)
-
-    def _move_plan(self, offset: int) -> None:
-        index = self._selected_plan_index()
-        if index is None:
-            return
-        target = index + offset
-        if not 0 <= target < len(self.plan_items):
-            return
-        self.plan_items[index], self.plan_items[target] = self.plan_items[target], self.plan_items[index]
-        self._save_plan(target)
-
-    def _selected_plan_index(self) -> int | None:
-        index = self.query_one("#plan-list", ListView).index
-        return index if index is not None and 0 <= index < len(self.plan_items) else None
-
-    def _save_plan(self, selected: int | None = None) -> None:
-        if self.plan_store:
-            self.plan_store.save(self.plan_items)
-        self._sync_plan_context()
-        self._refresh_plan(selected if selected is not None and selected >= 0 else None)
 
     def action_models(self) -> None:
         choices: list[tuple[str, str]] = [
@@ -511,7 +561,7 @@ class OpenCLITui(App[None]):
     def _start_default_api(self) -> None:
         profile = self.cli.api_profiles.default()
         if not profile:
-            self._mount_message("No saved API profile. Use Ctrl+M to select one.", "event-card")
+            self._mount_message("No saved API profile. Use /model or /api.", "event-card")
             return
         key = f"{profile['provider']}:{profile['model']}"
         self._select_model(f"api::{key}")
@@ -891,8 +941,13 @@ class OpenCLITui(App[None]):
 
     @work(thread=True, exclusive=True)
     def _run_message(self, message: str) -> None:
-        self.call_from_thread(self._set_busy, True)
         query, think_mode = self._parse_think_command(message)
+        activity = (
+            "Thinking · extended reasoning enabled · Escape stops"
+            if think_mode
+            else "Working · waiting for model · Escape stops"
+        )
+        self.call_from_thread(self._set_busy, True, activity)
         if query.startswith(("/", "!")):
             output = io.StringIO()
             try:
@@ -940,11 +995,29 @@ class OpenCLITui(App[None]):
 
     def _begin_assistant(self) -> None:
         self._assistant_text = ""
+        self._assistant_segment_text = ""
         self._response_render_truncated = False
-        self._assistant = Markdown("_Thinking…_", classes="assistant-message")
+        self._assistant = None
+        self._react_card = None
+        self._thinking_card = None
+        self._thinking_body = None
+        self._thinking_text = ""
+        self._follow_output = True
+
+    def _begin_assistant_segment(self) -> None:
+        """Mount response text at its true chronological stream position."""
+        self._assistant_segment_text = ""
+        self._assistant = Markdown("", classes="assistant-message")
         self.query_one("#timeline", VerticalScroll).mount(self._assistant)
 
+    @staticmethod
+    def _near_timeline_end(timeline: VerticalScroll) -> bool:
+        return timeline.scroll_y >= max(0, timeline.max_scroll_y - 1)
+
     def _handle_event(self, event: AgentEvent) -> None:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        if self._follow_output and not self._near_timeline_end(timeline):
+            self._follow_output = False
         self._events.append(event)
         if event.type == "token":
             remaining = self.MAX_RENDERED_RESPONSE_CHARS - len(self._assistant_text)
@@ -956,20 +1029,60 @@ class OpenCLITui(App[None]):
                         "event-card",
                     )
                 return
-            self._assistant_text += event.content[:remaining]
+            content = event.content[:remaining]
+            if self._assistant is None:
+                self._begin_assistant_segment()
+            self._assistant_text += content
+            self._assistant_segment_text += content
             if self._assistant:
-                self._assistant.update(self._assistant_text)
+                self._assistant.update(self._assistant_segment_text)
         elif event.type == "status":
-            self._mount_message(f"Status · {event.content}", "event-card")
+            self._assistant = None
+            self._mount_message(f"Status · {event.content}", "event-card status-card")
+        elif event.type == "thinking":
+            self._assistant = None
+            summary = event.content.strip()
+            if summary:
+                remaining = max(0, 8_000 - len(self._thinking_text))
+                self._thinking_text += summary[:remaining]
+                if self._thinking_card is None:
+                    self._thinking_body = Static(self._thinking_text, markup=False)
+                    self._thinking_card = Collapsible(
+                        self._thinking_body,
+                        title="Thinking · provider summary",
+                        collapsed=True,
+                        classes="event-card thinking-card",
+                    )
+                    timeline.mount(self._thinking_card)
+                    self._prune_timeline()
+                elif self._thinking_body is not None:
+                    self._thinking_body.update(self._thinking_text)
+        elif event.type == "react_state":
+            self._assistant = None
+            details = dict(event.details)
+            phase = str(details.get("phase") or event.content or "ready")
+            steps = int(details.get("steps", 0))
+            maximum = int(details.get("max_steps", 0))
+            label = f"ReAct · {phase} · {steps}/{maximum}"
+            if self._react_card is None:
+                self._react_card = self._mount_message(
+                    label, "event-card react-card"
+                )
+            else:
+                self._react_card.update(label)
+            self._refresh_state()
         elif event.type == "tool":
+            self._assistant = None
             details = json.dumps(dict(event.arguments), indent=2, default=str)
-            self._mount_collapsible(f"Tool · {event.name}", details)
-            self._inspect(f"TOOL {event.name}\n\n{details}")
+            self._mount_collapsible(
+                f"Tool · {event.name}", details, "event-card tool-card"
+            )
         elif event.type == "tool_result":
+            self._assistant = None
             text = f"Result · {event.name}: {event.summary or 'complete'}"
-            self._mount_message(text, "event-card")
-            self._inspect(text)
+            self._mount_message(text, "event-card result-card")
         elif event.type == "file_change":
+            self._assistant = None
             details = dict(event.details)
             diff = str(details.get("diff", "")) or "Diff unavailable"
             suffix = " (truncated)" if details.get("truncated") else ""
@@ -979,54 +1092,96 @@ class OpenCLITui(App[None]):
                 f"Change · {details.get('path', event.summary)} "
                 f"(+{added}/-{removed}){suffix}"
             )
-            self._mount_collapsible(title, self._diff_preview(diff))
-            self._inspect(f"{title}\n\n{diff}")
+            self._mount_collapsible(
+                title, self._diff_preview(diff), "event-card change-card"
+            )
+        elif event.type == "task_plan":
+            self._assistant = None
+            self._sync_session_plan()
         elif event.type == "error":
-            self._mount_message(f"Error · {event.content}", "event-card")
-            self._inspect(event.content)
+            self._assistant = None
+            self._mount_message(f"Error · {event.content}", "event-card error-card")
         elif event.type == "done" and not self._assistant_text and event.content:
             self._assistant_text = event.content
+            if self._assistant is None:
+                self._begin_assistant_segment()
+            self._assistant_segment_text = event.content
             if self._assistant:
-                self._assistant.update(self._assistant_text)
-        self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
+                self._assistant.update(self._assistant_segment_text)
+        if self._follow_output:
+            timeline.scroll_end(animate=False)
 
-    def _mount_message(self, text: str, classes: str) -> None:
-        self.query_one("#timeline", VerticalScroll).mount(Static(text, classes=classes))
+    def _mount_message(self, text: str, classes: str) -> Static:
+        message = Static(text, classes=classes)
+        self.query_one("#timeline", VerticalScroll).mount(message)
+        self._prune_timeline()
+        return message
 
     @staticmethod
     def _diff_preview(diff: str) -> Text:
-        """Render bounded unified diffs as text, never Textual markup."""
+        """Render bounded unified diffs with full semantic foreground/background styles."""
         preview = Text()
         for line in diff.splitlines(keepends=True):
             if line.startswith("+") and not line.startswith("+++"):
-                preview.append(line, style="green")
+                preview.append(line, style="#9bd8b4 on #10261d")
             elif line.startswith("-") and not line.startswith("---"):
-                preview.append(line, style="red")
+                preview.append(line, style="#efa0aa on #2a1419")
             elif line.startswith("@@"):
-                preview.append(line, style="bold cyan")
+                preview.append(line, style="bold #79b8d1 on #102029")
+            elif line.startswith(("+++", "---")):
+                preview.append(line, style="bold #8ca3a0 on #151d20")
             else:
-                preview.append(line, style="dim")
+                preview.append(line, style="#778482 on #0b1012")
         return preview
 
-    def _mount_collapsible(self, title: str, body: str | Text) -> None:
-        self.query_one("#timeline", VerticalScroll).mount(
-            Collapsible(
-                Static(body, markup=False),
-                title=title,
-                collapsed=True,
-                classes="event-card",
-            )
+    def _mount_collapsible(
+        self,
+        title: str,
+        body: str | Text,
+        classes: str = "event-card",
+    ) -> Collapsible:
+        card = Collapsible(
+            Static(body, markup=False),
+            title=title,
+            collapsed=True,
+            classes=classes,
         )
+        self.query_one("#timeline", VerticalScroll).mount(card)
+        self._prune_timeline()
+        return card
 
-    def _inspect(self, text: str) -> None:
-        inspector = self.query_one("#inspector", RichLog)
-        inspector.clear()
-        inspector.write(text)
+    def _prune_timeline(self) -> None:
+        timeline = self.query_one("#timeline", VerticalScroll)
+        excess = len(timeline.children) - self.MAX_MOUNTED_WIDGETS
+        if excess <= 0:
+            return
+        protected = {self._assistant, self._react_card, self._plan_card, self._thinking_card}
+        for child in list(timeline.children):
+            if excess <= 0:
+                break
+            if child in protected:
+                continue
+            child.remove()
+            excess -= 1
+            self._history_windowed = True
 
     def _set_busy(self, busy: bool, message: str | None = None) -> None:
         self._busy = busy
+        self._activity_message = message or (
+            "Working · Escape stops" if busy else "Ready"
+        )
+        self._busy_started = time.monotonic() if busy else 0.0
+        activity = self.query_one("#activity", Static)
+        activity.set_class(busy, "busy")
+        activity.set_class(not busy, "ready")
+        activity.update(self._activity_message)
+
+    def _refresh_activity_clock(self) -> None:
+        if not self._busy:
+            return
+        elapsed = max(0.0, time.monotonic() - self._busy_started)
         self.query_one("#activity", Static).update(
-            message or ("Agent working… Escape stops generation" if busy else "Ready")
+            f"{self._activity_message} · {elapsed:0.1f}s"
         )
 
     def _refresh_state(self) -> None:
@@ -1035,22 +1190,53 @@ class OpenCLITui(App[None]):
         filled = min(16, max(0, round(snapshot.percent_used * 16 / 100)))
         meter = "█" * filled + "░" * (16 - filled)
         session = self.cli.chat_session.session_id if self.cli.chat_session else "not started"
-        self.query_one("#status-line", Static).update(
-            f"{snapshot.profile.display_name}  ctx [{meter}] {snapshot.percent_used:.0f}% "
-            f"{snapshot.used_tokens:,}/{snapshot.profile.context_window:,}  tokens {usage.total_tokens:,}  "
-            f"tools {'on' if self.cli.tools_enabled else 'off'}  "
-            f"web {'on' if self.cli.permission_manager.web_enabled else 'off'}  "
-            f"sandbox {'on' if self.cli.sandbox_enabled else 'off'}  session {session}"
+        react = self.cli.react_status()
+        react_label = (
+            f"{react['phase']} {react['steps']}/{react['max_steps']}"
+            if self.cli.react_enabled
+            else "off"
         )
+        context_marker = "~" if snapshot.estimated else ""
+        usage_marker = "~" if usage.estimated_turns else ""
+        cwd = self.cli.workspace_context.relative_path()
+        self.query_one("#identity", Static).update(
+            f"OpenCLI · {snapshot.profile.display_name} · {cwd}"
+        )
+        if self._layout_width < 60:
+            status = f"ctx {snapshot.percent_used:.0f}% · react {react['phase']}"
+        elif self._layout_width < 80:
+            status = (
+                f"ctx {context_marker}{snapshot.used_tokens:,}/{snapshot.profile.context_window:,} "
+                f"· usage {usage_marker}{usage.total_tokens:,} · tools "
+                f"{'on' if self.cli.tools_enabled else 'off'} · react {react_label}"
+            )
+        else:
+            history = " · older UI history windowed" if self._history_windowed else ""
+            status = (
+                f"ctx [{meter}] {snapshot.percent_used:.0f}% "
+                f"{context_marker}{snapshot.used_tokens:,}/{snapshot.profile.context_window:,} "
+                f"· usage {usage_marker}{usage.total_tokens:,} "
+                f"· tools {'on' if self.cli.tools_enabled else 'off'} "
+                f"· web {'on' if self.cli.permission_manager.web_enabled else 'off'} "
+                f"· react {react_label} · sandbox {self.cli.sandbox.backend} "
+                f"· session {session[:8]}{history}"
+            )
+        self.query_one("#status-line", Static).update(status)
 
     def _refresh_plan(self, selected: int | None = None) -> None:
-        view = self.query_one("#plan-list", ListView)
-        view.clear()
+        if not self.plan_items:
+            if self._plan_card is not None:
+                self._plan_card.remove()
+                self._plan_card = None
+            return
         markers = {"pending": "○", "in_progress": "◐", "completed": "●", "dismissed": "×"}
-        for item in self.plan_items:
-            view.append(ListItem(Label(f"{markers[item.status]} {item.text}")))
-        if selected is not None and self.plan_items:
-            view.index = min(selected, len(self.plan_items) - 1)
+        content = "Plan\n" + "\n".join(
+            f"{markers.get(item.status, '○')} {item.text}" for item in self.plan_items
+        )
+        if self._plan_card is None:
+            self._plan_card = self._mount_message(content, "event-card react-card")
+        else:
+            self._plan_card.update(content)
 
     def _sync_plan_context(self) -> None:
         self.cli.task_plan_context = "\n".join(
@@ -1063,7 +1249,9 @@ class OpenCLITui(App[None]):
         expected_name = f"{self.cli.chat_session.session_id}.json"
         if self.plan_store is None or self.plan_store.path.name != expected_name:
             self.plan_store = TaskPlanStore(
-                Path.cwd(), self.cli.chat_session.session_id, root=self.state_root
+                self.cli.workspace_context.root,
+                self.cli.chat_session.session_id,
+                root=self.state_root,
             )
             self.cli.task_plan_store = self.plan_store
         self.plan_items = self.plan_store.load()

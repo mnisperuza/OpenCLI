@@ -17,7 +17,7 @@ import sqlite3
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, Iterable, List, Optional
+from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
@@ -36,8 +36,12 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, FunctionModel
 from pydantic_ai.usage import UsageLimits
 
 from .web_retrieval import WebRetrievalError, WebRetriever
-from .sandbox import DockerSandbox
+from .react_loop import (
+    ReactLoopController, ReactLoopLimitError, ReactLoopPolicy, ReactPhase,
+)
+from .sandbox import SandboxBackend
 from .task_plan import PLAN_STATUSES, TaskPlanStore
+from .workspace_context import WorkspaceContext
 
 
 EventSink = Callable[[Dict[str, Any]], None]
@@ -68,6 +72,11 @@ class RuntimeConfig:
     persist_state: bool = True
     tools_enabled: bool = True
     auto_tool_routing: bool = False
+    react_enabled: bool = True
+    react_max_steps: int = 10
+    react_max_repeated_action: int = 2
+    react_max_failures: int = 3
+    react_decision_retries: int = 2
     state_db_path: Optional[Path] = None
     session_id: Optional[str] = None
     protected_path_patterns: tuple[str, ...] = (
@@ -192,19 +201,39 @@ class LocalWorkspaceTools:
         config: RuntimeConfig,
         event_sink: Optional[EventSink] = None,
         permission_callback: Optional[PermissionCallback] = None,
+        workspace_context: Optional[WorkspaceContext] = None,
     ):
-        self.workspace = workspace.resolve()
+        self.workspace_context = workspace_context or WorkspaceContext(workspace)
+        self.workspace = self.workspace_context.root
         self.config = config
         self.event_sink = event_sink
         self.permission_callback = permission_callback
 
     def _resolve(self, path: str = ".") -> Path:
-        candidate = (self.workspace / path).resolve()
-        try:
-            candidate.relative_to(self.workspace)
-        except ValueError as error:
-            raise ValueError("Path must stay inside trusted workspace") from error
-        return candidate
+        return self.workspace_context.resolve(path)
+
+    def get_working_directory(self) -> Dict[str, Any]:
+        """Show trusted workspace root and current logical working directory."""
+        self._event("get_working_directory", {})
+        result = self.workspace_context.state()
+        self._result("get_working_directory", str(result["current_directory"]))
+        return result
+
+    def set_working_directory(self, path: str) -> Dict[str, Any]:
+        """Change logical directory inside trusted workspace; host process never changes."""
+        self._event("set_working_directory", {"path": path})
+        target = self.workspace_context.set_current_directory(path)
+        result = self.workspace_context.state()
+        result["current_directory"] = self.workspace_context.relative_path(target)
+        self._result("set_working_directory", str(result["current_directory"]))
+        return result
+
+    def list_allowed_roots(self) -> Dict[str, Any]:
+        """List paths available to this session; only trusted workspace is present."""
+        self._event("list_allowed_roots", {})
+        result = self.workspace_context.state()
+        self._result("list_allowed_roots", str(len(result["allowed_roots"])))
+        return result
 
     def _event(self, name: str, arguments: Dict[str, Any]) -> None:
         if self.event_sink:
@@ -293,7 +322,7 @@ class LocalWorkspaceTools:
     def _deny_protected(self, name: str, target: Path) -> Dict[str, Any]:
         self._result(name, "protected path")
         return {
-            "path": str(target.relative_to(self.workspace)),
+            "path": target.relative_to(self.workspace).as_posix(),
             "error": "Path is protected and unavailable to agents.",
             "protected": True,
         }
@@ -315,7 +344,7 @@ class LocalWorkspaceTools:
         if not root.is_dir():
             raise ValueError(f"Not a directory: {path}")
         files = [
-            str(item.relative_to(self.workspace))
+            item.relative_to(self.workspace).as_posix()
             for item in root.glob(pattern)
             if item.is_file() and not self._is_protected(item)
         ]
@@ -348,7 +377,7 @@ class LocalWorkspaceTools:
         content = target.read_text(encoding="utf-8", errors="replace")
         limit = self.config.max_file_chars
         output = {
-            "path": str(target.relative_to(self.workspace)),
+            "path": target.relative_to(self.workspace).as_posix(),
             "content": content[:limit],
             "truncated": len(content) > limit,
         }
@@ -400,7 +429,7 @@ class LocalWorkspaceTools:
                 if needle in line.casefold():
                     matches.append(
                         {
-                            "path": str(file_path.relative_to(self.workspace)),
+                            "path": file_path.relative_to(self.workspace).as_posix(),
                             "line": line_number,
                             "text": line[:500],
                         }
@@ -425,7 +454,7 @@ class LocalWorkspaceTools:
             raise ValueError(f"Not a file: {path}")
         digest = hashlib.sha256(target.read_bytes()).hexdigest()
         result = {
-            "path": str(target.relative_to(self.workspace)),
+            "path": target.relative_to(self.workspace).as_posix(),
             "size": target.stat().st_size,
             "sha256": digest,
         }
@@ -467,7 +496,7 @@ class LocalWorkspaceTools:
         temporary.write_text(content, encoding="utf-8")
         temporary.replace(target)
         self._file_change(path, before, content, "write_text_file")
-        result = {"path": str(target.relative_to(self.workspace)), "chars": len(content), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
+        result = {"path": target.relative_to(self.workspace).as_posix(), "chars": len(content), "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest()}
         self._result("write_text_file", f"wrote {len(content)} characters")
         return result
 
@@ -503,7 +532,7 @@ class LocalWorkspaceTools:
         temporary.write_text(replacement, encoding="utf-8")
         temporary.replace(target)
         self._file_change(path, content, replacement, "edit_text_file")
-        result = {"path": str(target.relative_to(self.workspace)), "replacements": 1, "sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest()}
+        result = {"path": target.relative_to(self.workspace).as_posix(), "replacements": 1, "sha256": hashlib.sha256(replacement.encode("utf-8")).hexdigest()}
         self._result("edit_text_file", "edited one occurrence")
         return result
 
@@ -520,7 +549,7 @@ class LocalWorkspaceTools:
             self._result("create_directory", "permission denied")
             return {"path": path, "permission_denied": True}
         target.mkdir(parents=True, exist_ok=True)
-        result = {"path": str(target.relative_to(self.workspace)), "created": True}
+        result = {"path": target.relative_to(self.workspace).as_posix(), "created": True}
         self._result("create_directory", "directory ready")
         return result
 
@@ -540,10 +569,57 @@ class LocalModelAdapter:
     )
     _TOOL_DECISION_BUFFER_CHARS = 512
 
-    def __init__(self, engine: Any, event_sink: Optional[EventSink] = None):
+    def __init__(
+        self,
+        engine: Any,
+        event_sink: Optional[EventSink] = None,
+        *,
+        single_tool_per_step: bool = False,
+        react_controller: Optional[ReactLoopController] = None,
+        react_decision_retries: int = 2,
+    ):
         self.engine = engine
         self.event_sink = event_sink
+        self.single_tool_per_step = single_tool_per_step
+        self.react = react_controller
+        self.react_decision_retries = max(1, int(react_decision_retries))
         self._call_sequence = 0
+
+    def _react_policy(self, info: AgentInfo) -> tuple[Any, Optional[str]]:
+        """Return provider tool_choice and optional exact required tool name."""
+        if self.react is None or not self.react.enabled or not info.function_tools:
+            return "auto", None
+        phase = self.react.state.phase
+        if phase == ReactPhase.DISPATCH:
+            name = "react_dispatch"
+        elif phase == ReactPhase.CRITIQUE:
+            name = "critique_and_plan"
+        elif phase in {ReactPhase.PLAN, ReactPhase.ACT}:
+            return "required", None
+        else:
+            return "none", None
+        return {
+            "type": "function",
+            "function": {"name": name},
+        }, name
+
+    def _react_prompt_rule(self, info: AgentInfo) -> str:
+        choice, exact = self._react_policy(info)
+        if exact:
+            return (
+                f"REACT CONTROL: phase={self.react.state.phase.value}. "
+                f"You MUST call {exact} now. Output that one tool call only. "
+                "Do not answer with prose."
+            )
+        if choice == "required":
+            return (
+                f"REACT CONTROL: phase={self.react.state.phase.value}. "
+                "Call exactly one useful non-control tool now; prose is invalid. "
+                f"Loop context: {json.dumps(self.react.loop_context(), ensure_ascii=False)}"
+            )
+        if choice == "none":
+            return "REACT CONTROL: tools are closed; give the final answer or user question."
+        return ""
 
     @property
     def model_name(self) -> str:
@@ -661,6 +737,7 @@ class LocalModelAdapter:
         final_rule = self._final_language_rule(messages)
         return (
             f"{self._tool_protocol(info)}\n\n"
+            f"{self._react_prompt_rule(info)}\n\n"
             "Conversation:\n"
             f"{self._messages_as_transcript(messages)}\n\n"
             f"{final_rule}\n\n"
@@ -756,54 +833,100 @@ class LocalModelAdapter:
             }
             for tool in info.function_tools
         ]
+        tool_choice, exact_tool = self._react_policy(info)
+        required = tool_choice == "required" or exact_tool is not None
+        request_messages = self._openai_messages(messages)
+        react_rule = self._react_prompt_rule(info)
+        if react_rule:
+            request_messages.append({"role": "system", "content": react_rule})
+        attempts = self.react_decision_retries if required else 1
         seen_calls: set[str] = set()
-        for event in client.stream_chat(self._openai_messages(messages), tools):
-            if event.get("type") == "output_limit":
-                message = str(event.get("content") or "API output limit reached.")
-                if self.event_sink:
-                    self.event_sink({"type": "status", "content": message})
-                yield f"\n\n[{message}]"
-                return
-            if event.get("type") == "usage":
-                if self.event_sink:
-                    self.event_sink(dict(event))
-                continue
-            if event.get("type") == "token":
-                yield event.get("content", "")
-                continue
-            if event.get("type") != "tool_calls":
-                continue
-            delta_calls: Dict[int, DeltaToolCall] = {}
-            for call in event.get("calls", []):
-                name = call.get("name", "")
-                raw_arguments = call.get("arguments", "{}") or "{}"
-                try:
-                    parsed_arguments = json.loads(raw_arguments)
-                except json.JSONDecodeError:
-                    parsed_arguments = {"invalid_json": raw_arguments}
-                signature = name + "\n" + json.dumps(
-                    parsed_arguments, sort_keys=True, ensure_ascii=False
-                )
-                if signature in seen_calls:
+        for attempt in range(attempts):
+            try:
+                events = client.stream_chat(request_messages, tools, tool_choice)
+            except TypeError:
+                # Compatibility for third-party clients implementing the old protocol.
+                events = client.stream_chat(request_messages, tools)
+            found_call = False
+            buffered_text: List[str] = []
+            for event in events:
+                if event.get("type") == "output_limit":
+                    message = str(event.get("content") or "API output limit reached.")
+                    if self.event_sink:
+                        self.event_sink({"type": "status", "content": message})
+                    if not required:
+                        yield f"\n\n[{message}]"
                     continue
-                seen_calls.add(signature)
-                call_id = call.get("id") or f"remote-call-{self._call_sequence}"
-                self._call_sequence += 1
-                if self.event_sink:
-                    self.event_sink(
-                        {
-                            "type": "tool_call",
-                            "name": name,
-                            "arguments": parsed_arguments,
-                        }
+                if event.get("type") == "usage":
+                    if self.event_sink:
+                        self.event_sink(dict(event))
+                    continue
+                if event.get("type") == "token":
+                    content = event.get("content", "")
+                    if required:
+                        buffered_text.append(content)
+                    else:
+                        yield content
+                    continue
+                if event.get("type") != "tool_calls":
+                    continue
+                delta_calls: Dict[int, DeltaToolCall] = {}
+                for call in event.get("calls", []):
+                    name = call.get("name", "")
+                    if tool_choice == "none":
+                        continue
+                    if exact_tool and name != exact_tool:
+                        continue
+                    if required and not exact_tool and name in {
+                        "react_dispatch", "critique_and_plan", "start_react_task",
+                    }:
+                        continue
+                    raw_arguments = call.get("arguments", "{}") or "{}"
+                    try:
+                        parsed_arguments = json.loads(raw_arguments)
+                    except json.JSONDecodeError:
+                        continue
+                    signature = name + "\n" + json.dumps(
+                        parsed_arguments, sort_keys=True, ensure_ascii=False
                     )
-                delta_calls[len(delta_calls)] = DeltaToolCall(
-                    name=name,
-                    json_args=raw_arguments,
-                    tool_call_id=call_id,
-                )
-            if delta_calls:
-                yield delta_calls
+                    if signature in seen_calls:
+                        continue
+                    seen_calls.add(signature)
+                    call_id = call.get("id") or f"remote-call-{self._call_sequence}"
+                    self._call_sequence += 1
+                    if self.event_sink:
+                        self.event_sink({"type": "tool_call", "name": name, "arguments": parsed_arguments})
+                    delta_calls[len(delta_calls)] = DeltaToolCall(
+                        name=name,
+                        json_args=raw_arguments,
+                        tool_call_id=call_id,
+                    )
+                    if self.single_tool_per_step:
+                        break
+                if delta_calls:
+                    found_call = True
+                    yield delta_calls
+                    break
+            if found_call or not required:
+                return
+            request_messages = [
+                *request_messages,
+                {"role": "assistant", "content": "".join(buffered_text) or "Invalid response."},
+                {
+                    "role": "user",
+                    "content": (
+                        "STRUCTURED OUTPUT ERROR. Return exactly one valid tool call"
+                        + (f" to {exact_tool}" if exact_tool else "")
+                        + "; no prose."
+                    ),
+                },
+            ]
+        reason = f"ReAct structured decision failed after {attempts} attempts."
+        if self.react is not None:
+            self.react.fallback_to_user(reason)
+        if self.event_sink:
+            self.event_sink({"type": "status", "content": reason})
+        yield reason + " Please clarify or try another model."
 
     @staticmethod
     def _strip_json_fence(text: str) -> str:
@@ -935,12 +1058,64 @@ class LocalModelAdapter:
 
         prompt = self._prompt(messages, info)
         allowed_names = {tool.name for tool in info.function_tools}
-        buffered = ""
-        plain_text = False
-
+        tool_choice, exact_tool = self._react_policy(info)
+        required = tool_choice == "required" or exact_tool is not None
+        if tool_choice == "none":
+            allowed_names.clear()
         generate = getattr(self.engine, "generate_runtime_stream", None)
         if generate is None:
             generate = self.engine.generate_stream
+
+        if required:
+            for attempt in range(self.react_decision_retries):
+                buffered = ""
+                for chunk in generate(prompt):
+                    if chunk.get("type") == "error":
+                        raise RuntimeError(chunk.get("content", "Local model failed"))
+                    if chunk.get("type") == "token":
+                        buffered += chunk.get("content", "")
+                calls = self._parse_tool_calls(buffered, allowed_names)
+                if exact_tool:
+                    calls = [call for call in calls if call["name"] == exact_tool]
+                else:
+                    calls = [
+                        call for call in calls
+                        if call["name"] not in {
+                            "react_dispatch", "critique_and_plan", "start_react_task",
+                        }
+                    ]
+                calls = calls[:1]
+                if calls:
+                    call = calls[0]
+                    if self.event_sink:
+                        self.event_sink({"type": "tool_call", **call})
+                    call_id = f"local-call-{self._call_sequence}"
+                    self._call_sequence += 1
+                    yield {0: DeltaToolCall(
+                        name=call["name"],
+                        json_args=json.dumps(call["arguments"], ensure_ascii=False),
+                        tool_call_id=call_id,
+                    )}
+                    return
+                prompt += (
+                    "\n\nSTRUCTURED OUTPUT ERROR. Your previous response was invalid. "
+                    "Return exactly one valid tool call"
+                    + (f" to {exact_tool}" if exact_tool else "")
+                    + "; no prose."
+                )
+            reason = (
+                f"ReAct structured decision failed after "
+                f"{self.react_decision_retries} attempts."
+            )
+            if self.react is not None:
+                self.react.fallback_to_user(reason)
+            if self.event_sink:
+                self.event_sink({"type": "status", "content": reason})
+            yield reason + " Please clarify or try another model."
+            return
+
+        buffered = ""
+        plain_text = False
         for chunk in generate(prompt):
             chunk_type = chunk.get("type")
             if chunk_type == "error":
@@ -977,6 +1152,8 @@ class LocalModelAdapter:
             return
 
         calls = self._parse_tool_calls(buffered, allowed_names)
+        if self.single_tool_per_step:
+            calls = calls[:1]
         if calls:
             if self.event_sink:
                 for call in calls:
@@ -1025,6 +1202,15 @@ class PydanticAgentRuntime:
         r"reemplazar|editar|actualizar|modificar|guardar|mejorar)\b",
         re.IGNORECASE,
     )
+    _PLAN_REQUEST = re.compile(
+        r"\b(?:plan|roadmap|outline|break\s+down|planning|planear|planifique)\b",
+        re.IGNORECASE,
+    )
+    _IMPLEMENT_REQUEST = re.compile(
+        r"\b(?:implement|code|edit|write|create|apply|execute|fix|build|"
+        r"implementar|programar|editar|escribir|crear|aplicar|ejecutar|arreglar)\b",
+        re.IGNORECASE,
+    )
     _DURABLE_MEMORY_PREFIX = "OPENCLI DURABLE MEMORY"
     _COMPACT_MEMORY_PREFIX = "OPENCLI COMPACTED CONTEXT"
     _IMPORTED_MEMORY_PREFIX = "OPENCLI IMPORTED SESSION"
@@ -1035,12 +1221,14 @@ class PydanticAgentRuntime:
         workspace: Optional[Path] = None,
         config: Optional[RuntimeConfig] = None,
         permission_callback: Optional[PermissionCallback] = None,
-        sandbox: Optional[DockerSandbox] = None,
+        sandbox: Optional[SandboxBackend] = None,
         task_plan_store: Optional[TaskPlanStore] = None,
         session_title_callback: Optional[SessionTitleCallback] = None,
+        workspace_context: Optional[WorkspaceContext] = None,
     ):
         self.engine = engine
-        self.workspace = (workspace or Path.cwd()).resolve()
+        self.workspace_context = workspace_context or WorkspaceContext(workspace or Path.cwd())
+        self.workspace = self.workspace_context.root
         self.config = config or RuntimeConfig()
         self._messages: List[ModelMessage] = []
         self._pending_events: List[Dict[str, Any]] = []
@@ -1052,6 +1240,15 @@ class PydanticAgentRuntime:
         self._session_title_callback = session_title_callback
         self._denied_permissions: set[str] = set()
         self._state: Optional[SQLiteRuntimeState] = None
+        self.react = ReactLoopController(
+            ReactLoopPolicy(
+                max_steps=max(1, self.config.react_max_steps),
+                max_repeated_action=max(1, self.config.react_max_repeated_action),
+                max_consecutive_failures=max(1, self.config.react_max_failures),
+                single_action_per_model_step=self.config.react_enabled,
+            )
+        )
+        self.react.enabled = self.config.react_enabled
 
         if self.config.persist_state:
             state_path = self.config.state_db_path or (
@@ -1075,6 +1272,7 @@ class PydanticAgentRuntime:
             self.config,
             event_sink=self._record_event,
             permission_callback=self._permission_allowed,
+            workspace_context=self.workspace_context,
         )
         self.web = WebRetriever(
             max_results=self.config.max_web_results,
@@ -1086,37 +1284,52 @@ class PydanticAgentRuntime:
         self.model_adapter = LocalModelAdapter(
             engine,
             event_sink=self._record_event,
+            single_tool_per_step=self.config.react_enabled,
+            react_controller=self.react,
+            react_decision_retries=self.config.react_decision_retries,
         )
         self.model = FunctionModel(
             stream_function=self.model_adapter.stream,
             model_name=self.model_adapter.model_name,
         )
         read_tools = [
+            self.tools.get_working_directory,
+            self.tools.set_working_directory,
+            self.tools.list_allowed_roots,
             self.tools.list_files,
             self.tools.read_text_file,
             self.tools.search_text,
             self.tools.file_info,
         ]
-        mutation_tools = [
-            *read_tools,
-            self.tools.write_text_file,
-            self.tools.edit_text_file,
-            self.tools.create_directory,
-        ]
         agent_tools = [
             *read_tools,
-            self.tools.write_text_file,
-            self.tools.edit_text_file,
-            self.tools.create_directory,
             self.web.web_search,
             self.web.web_fetch,
         ]
+        if self.config.react_enabled:
+            agent_tools.extend([self.react_dispatch, self.critique_and_plan])
         if self.task_plan_store is not None:
-            agent_tools.extend([self.get_task_plan, self.update_task_plan_item])
+            agent_tools.extend(
+                [
+                    self.get_task_plan,
+                    self.create_task_plan,
+                    self.add_task_plan_item,
+                    self.update_task_plan_item,
+                ]
+            )
         if self._session_title_callback is not None:
             agent_tools.append(self.set_session_title)
         if self.sandbox is not None and self.sandbox.is_available():
-            agent_tools.append(self.run_sandboxed_command)
+            agent_tools.extend([self.get_sandbox_status, self.run_sandboxed_command])
+
+        # Read-only agent is default. File mutation tools enter schema only for
+        # an explicit user change request, so a review/status turn cannot edit.
+        mutation_tools = [
+            *agent_tools,
+            self.tools.write_text_file,
+            self.tools.edit_text_file,
+            self.tools.create_directory,
+        ]
 
         if not self.config.tools_enabled:
             mutation_tools = []
@@ -1140,9 +1353,22 @@ class PydanticAgentRuntime:
                 "in web-based answers. Keep answers concise. Follow the latest "
                 "RESPONSE LANGUAGE instruction even when older context differs. "
                 "A user-maintained task plan may be supplied. Use get_task_plan "
-                "before changing it. Update an item only when evidence shows it is "
+                "before changing it. For a multi-step coding task, create a concise "
+                "ordered plan before mutations, mark its active item in_progress, "
+                "then mark items completed only after tool evidence. For planning-only "
+                "requests, create or refine the persistent plan without editing files. "
+                "Update an item only when evidence shows it is "
                 "completed, or when it is no longer applicable; use dismissed for "
                 "the latter. Never dismiss an item merely because it is difficult."
+                " Review, explain, and status requests are read-only: never change "
+                "files unless user explicitly asks to create, write, edit, modify, "
+                "implement, or fix them. Do not change working directory unless user "
+                "asks, or a named workspace path needs navigation. Paths resolve from "
+                "the logical working directory."
+                f" {self.react.instruction_block()}"
+                " When ReAct is enabled, react_dispatch is mandatory at the start "
+                "of every turn. After each real action observation, "
+                "critique_and_plan is mandatory before another action or final answer."
                 " After first useful response in an untitled chat, call "
                 "set_session_title once with a short factual title."
             )
@@ -1162,6 +1388,16 @@ class PydanticAgentRuntime:
                     "description": (getattr(tool, "__doc__", "") or "").strip(),
                 }
                 for tool in agent_tools
+            ],
+            ensure_ascii=False,
+        )
+        self._mutation_tool_prompt_text = json.dumps(
+            [
+                {
+                    "name": getattr(tool, "__name__", tool.__class__.__name__),
+                    "description": (getattr(tool, "__doc__", "") or "").strip(),
+                }
+                for tool in mutation_tools
             ],
             ensure_ascii=False,
         )
@@ -1190,17 +1426,195 @@ class PydanticAgentRuntime:
             ],
         }
 
+    def start_react_task(
+        self,
+        goal: str,
+        paths: Optional[List[str]] = None,
+        max_steps: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Request a bounded ReAct task for genuinely multi-step work.
+
+        This starts no command and grants no permission. The runtime caps steps,
+        detects repetition/failures, and later tool actions retain normal
+        permission checks.
+
+        Args:
+            goal: Concrete outcome to pursue, not private reasoning.
+            paths: Optional workspace-relative files or directories to focus on.
+            max_steps: Requested action budget; OpenCLI caps it safely.
+        """
+        resolved_paths: List[str] = []
+        for path in paths or []:
+            if not isinstance(path, str) or not path.strip():
+                return {"started": False, "error": "ReAct paths must be non-empty strings."}
+            try:
+                resolved = self.workspace_context.resolve(path)
+            except ValueError as error:
+                return {"started": False, "error": f"Invalid ReAct path {path!r}: {error}"}
+            relative = self.workspace_context.relative_path(resolved)
+            if relative not in resolved_paths:
+                resolved_paths.append(relative)
+        try:
+            status = self.react.start_task(
+                goal, paths=tuple(resolved_paths), max_steps=max_steps
+            )
+        except (TypeError, ValueError) as error:
+            return {"started": False, "error": str(error)}
+        self._record_event(
+            {
+                "type": "tool_result",
+                "name": "start_react_task",
+                "summary": f"started: {status['goal']} ({status['max_steps']} steps)",
+            }
+        )
+        return {"started": True, **status}
+
+    def react_dispatch(
+        self,
+        decision: Literal["answer", "act", "ask_user"],
+        summary: str,
+        goal: str = "",
+        paths: Optional[List[str]] = None,
+        max_steps: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Route every ReAct-enabled turn through one strict host transition.
+
+        Args:
+            decision: answer for direct prose, act for tools, ask_user for a blocker.
+            summary: Short public reason for the route; never hidden reasoning.
+            goal: Concrete task outcome, required for act.
+            paths: Optional workspace-relative focus paths.
+            max_steps: Requested action budget, capped by OpenCLI.
+        """
+        resolved_paths: List[str] = []
+        if decision == "act":
+            for path in paths or []:
+                if not isinstance(path, str) or not path.strip():
+                    raise ValueError("ReAct paths must be non-empty strings.")
+                resolved = self.workspace_context.resolve(path)
+                relative = self.workspace_context.relative_path(resolved)
+                if relative not in resolved_paths:
+                    resolved_paths.append(relative)
+            if not goal.strip():
+                raise ValueError("An act dispatch requires a concrete goal.")
+        self.react.dispatch(decision, summary=summary)
+        if decision == "act":
+            status = self.react.start_task(
+                goal, paths=tuple(resolved_paths), max_steps=max_steps
+            )
+        else:
+            status = self.react.status()
+        self._record_event({
+            "type": "tool_result",
+            "name": "react_dispatch",
+            "summary": f"dispatch: {decision}",
+        })
+        return status
+
+    def critique_and_plan(
+        self,
+        progress: str,
+        evidence: Optional[List[str]] = None,
+        blocker: str = "",
+        next_action: str = "",
+        complete: bool = False,
+        needs_user: bool = False,
+    ) -> Dict[str, Any]:
+        """Record bounded public reflection and select continue/finish/ask-user.
+
+        Args:
+            progress: Concise statement of verified progress.
+            evidence: Short facts from tool results.
+            blocker: Current blocker, if any.
+            next_action: Next useful action when continuing.
+            complete: True only when evidence supports task completion.
+            needs_user: True only when user input is required.
+        """
+        status = self.react.submit_critique({
+            "progress": progress,
+            "evidence": evidence or [],
+            "blocker": blocker,
+            "next_action": next_action,
+            "complete": complete,
+            "needs_user": needs_user,
+        })
+        self._record_event({
+            "type": "tool_result",
+            "name": "critique_and_plan",
+            "summary": f"critique: {status['phase']}",
+        })
+        return status
+
     def update_task_plan_item(self, item_id: str, status: str) -> Dict[str, Any]:
         """Mark one task-plan item pending, in_progress, completed, or dismissed."""
         if self.task_plan_store is None:
             return {"updated": False, "error": "Task plan is unavailable."}
         if status not in PLAN_STATUSES:
             return {"updated": False, "error": f"Invalid plan status: {status}"}
+        if status == "completed" and not self._has_successful_tool_evidence():
+            return {
+                "updated": False,
+                "error": (
+                    "Completion requires successful tool evidence from this turn. "
+                    "Inspect or verify the work first."
+                ),
+            }
         try:
             item = self.task_plan_store.update_status(item_id, status)
         except ValueError as error:
             return {"updated": False, "error": str(error)}
         self._record_event({"type": "task_plan", "content": f"{item.id}: {item.status}"})
+        return {
+            "updated": True,
+            "item": {"id": item.id, "text": item.text, "status": item.status},
+        }
+
+    def _has_successful_tool_evidence(self) -> bool:
+        failure_markers = ("error", "failed", "denied", "unavailable", "timed out")
+        return any(
+            event.get("name")
+            not in {"get_task_plan", "create_task_plan", "add_task_plan_item", "update_task_plan_item"}
+            and not any(
+                marker in str(event.get("summary", "")).casefold()
+                for marker in failure_markers
+            )
+            and not (
+                str(event.get("summary", "")).casefold().startswith("exit ")
+                and str(event.get("summary", "")).casefold() != "exit 0"
+            )
+            for event in self._tool_results_this_run
+        )
+
+    def create_task_plan(self, steps: List[str]) -> Dict[str, Any]:
+        """Create or replace persistent plan with 1-30 ordered concrete steps."""
+        if self.task_plan_store is None:
+            return {"updated": False, "error": "Task plan is unavailable."}
+        try:
+            items = self.task_plan_store.replace(steps)
+        except ValueError as error:
+            return {"updated": False, "error": str(error)}
+        self._record_event(
+            {"type": "task_plan", "content": f"Created {len(items)} plan steps"}
+        )
+        return {
+            "updated": True,
+            "items": [
+                {"id": item.id, "text": item.text, "status": item.status}
+                for item in items
+            ],
+        }
+
+    def add_task_plan_item(self, text: str) -> Dict[str, Any]:
+        """Append one concrete step to persistent task plan."""
+        if self.task_plan_store is None:
+            return {"updated": False, "error": "Task plan is unavailable."}
+        try:
+            item = self.task_plan_store.add_item(text)
+        except ValueError as error:
+            return {"updated": False, "error": str(error)}
+        self._record_event(
+            {"type": "task_plan", "content": f"Added plan item {item.id}"}
+        )
         return {
             "updated": True,
             "item": {"id": item.id, "text": item.text, "status": item.status},
@@ -1459,7 +1873,11 @@ class PydanticAgentRuntime:
         """Return prompt sections for model-aware context estimates."""
         return {
             "instructions": self.instructions,
-            "tool schemas": self._tool_prompt_text,
+            "tool schemas": (
+                self._mutation_tool_prompt_text
+                if self._is_workspace_mutation_request(current_prompt)
+                else self._tool_prompt_text
+            ),
             "history": self.model_adapter._messages_as_transcript(self._messages),
             "current prompt": current_prompt,
         }
@@ -1469,6 +1887,9 @@ class PydanticAgentRuntime:
         if not self.config.tools_enabled:
             return []
         tools = [
+            "get_working_directory",
+            "set_working_directory",
+            "list_allowed_roots",
             "list_files",
             "read_text_file",
             "search_text",
@@ -1479,44 +1900,113 @@ class PydanticAgentRuntime:
             "web_search",
             "web_fetch",
         ]
+        if self.config.react_enabled:
+            tools.extend(["react_dispatch", "critique_and_plan"])
         if self.sandbox is not None and self.sandbox.is_available():
-            tools.append("run_sandboxed_command")
+            tools.extend(["get_sandbox_status", "run_sandboxed_command"])
+        if self.task_plan_store is not None:
+            tools.extend(
+                [
+                    "get_task_plan",
+                    "create_task_plan",
+                    "add_task_plan_item",
+                    "update_task_plan_item",
+                ]
+            )
         return tools
 
-    def run_sandboxed_command(
-        self, command: List[str], write_access: bool = False
-    ) -> Dict[str, Any]:
-        """Run an argv command in an ephemeral Docker sandbox.
+    def get_sandbox_status(self) -> Dict[str, Any]:
+        """Show active sandbox backend, lifecycle, and sync state."""
+        if self.sandbox is None:
+            return {"backend": "none", "available": False}
+        return self.sandbox.status()
 
-        Network access is disabled. Workspace access is read-only unless
-        write_access is true, which separately asks for file-write approval.
+    def run_sandboxed_command(
+        self, command: List[str], write_access: bool = False, cwd: str = "."
+    ) -> Dict[str, Any]:
+        """Run argv in active Docker or E2B sandbox.
+
+        Docker network is disabled and its mount is read-only unless write_access
+        is approved. E2B changes remain remote until user runs /sandbox pull.
 
         Args:
             command: Executable and arguments as a list; shell syntax is unsupported.
             write_access: Request a writable workspace mount.
+            cwd: Workspace-relative logical directory.
         """
         self._record_event(
-            {"type": "tool", "name": "run_sandboxed_command", "arguments": {"command": command, "write_access": write_access}}
+            {"type": "tool", "name": "run_sandboxed_command", "arguments": {"command": command, "write_access": write_access, "cwd": cwd}}
         )
         if self.sandbox is None or not self.sandbox.is_available():
-            result = {"error": "Docker sandbox is disabled or unavailable."}
+            result = {"error": "Sandbox is disabled or unavailable."}
         elif not self._permission_allowed(
-            "command", "run_sandboxed_command", " ".join(command), "Run command in isolated Docker sandbox"
+            "command", "run_sandboxed_command", " ".join(command), "Run command in active isolated sandbox"
         ):
             result = {"permission_denied": True}
-        elif write_access and not self._permission_allowed(
-            "file_write", "run_sandboxed_command", " ".join(command), "Allow sandbox command to modify workspace files"
+        elif (write_access or getattr(self.sandbox, "backend", "") == "e2b") and not self._permission_allowed(
+            "file_write", "run_sandboxed_command", " ".join(command),
+            "Allow command in writable E2B environment or writable Docker project mount",
         ):
-            result = {"permission_denied": True, "write_access": True}
+            result = {
+                "permission_denied": True,
+                "write_access": write_access,
+                "backend": getattr(self.sandbox, "backend", "unknown"),
+            }
         else:
-            result = self.sandbox.run(command, write_access=write_access)
+            effective_cwd = (
+                self.workspace_context.relative_path()
+                if cwd in {"", "."}
+                else cwd
+            )
+            result = self.sandbox.run(
+                command, write_access=write_access, cwd=effective_cwd
+            )
         self._record_event(
             {"type": "tool_result", "name": "run_sandboxed_command", "summary": result.get("error") or f"exit {result.get('exit_code', 'unknown')}"}
         )
         return result
 
     def _record_event(self, event: Dict[str, Any]) -> None:
+        control_tools = {"react_dispatch", "critique_and_plan", "start_react_task"}
+        is_control = event.get("name") in control_tools
+        if event.get("type") == "tool_call" and not is_control:
+            step = self.react.before_tool(
+                str(event.get("name", "unknown")), event.get("arguments", {})
+            )
+            if step:
+                self._pending_events.append(
+                    {
+                        "type": "status",
+                        "content": (
+                            f"ReAct step {step}/{self.react.status()['max_steps']}: "
+                            f"{event.get('name', 'tool')}"
+                        ),
+                    }
+                )
+        elif event.get("type") == "tool_result" and not is_control:
+            self.react.after_tool(event)
         self._pending_events.append(event)
+        if self.react.enabled and (
+            event.get("type") == "tool_result"
+            or (event.get("type") == "tool_call" and not is_control)
+        ):
+            status = self.react.status()
+            self._pending_events.append({
+                "type": "react_state",
+                "content": status["phase"],
+                "summary": (
+                    f"{status['phase']} · step {status['steps']}/{status['max_steps']}"
+                ),
+                "details": {
+                    "phase": status["phase"],
+                    "steps": status["steps"],
+                    "max_steps": status["max_steps"],
+                    "failures": status["failures"],
+                    "last_tool": status["last_tool"],
+                    "halted_reason": status["halted_reason"],
+                    "timeline": status["timeline"],
+                },
+            })
         if event.get("type") == "tool_result":
             self._tool_results_this_run.append(dict(event))
         if self._state is None or event.get("type") not in {
@@ -1582,20 +2072,32 @@ class PydanticAgentRuntime:
             self._state.save_messages(self._messages)
 
     def _is_local_workspace_request(self, prompt: str) -> bool:
-        return bool(self._LOCAL_WORKSPACE_REQUEST.search(prompt)) and not bool(
-            self._EXPLICIT_ONLINE_REQUEST.search(prompt)
+        request = self._user_request_text(prompt)
+        return bool(self._LOCAL_WORKSPACE_REQUEST.search(request)) and not bool(
+            self._EXPLICIT_ONLINE_REQUEST.search(request)
         )
 
     def _is_workspace_mutation_request(self, prompt: str) -> bool:
-        return bool(self._WORKSPACE_MUTATION_REQUEST.search(prompt))
+        request = self._user_request_text(prompt)
+        if self._PLAN_REQUEST.search(request):
+            return bool(self._IMPLEMENT_REQUEST.search(request))
+        return bool(self._WORKSPACE_MUTATION_REQUEST.search(request))
+
+    @staticmethod
+    def _user_request_text(prompt: str) -> str:
+        """Remove OpenCLI language wrapper and file payload before intent checks."""
+        marker = "\nUSER REQUEST:\n"
+        request = prompt.rsplit(marker, 1)[-1] if marker in prompt else prompt
+        return request.split("\n\nWorkspace context:\n", 1)[0]
 
     def _mutation_result(self, prompt: str) -> tuple[bool, bool]:
         """Return (attempted, succeeded) for mutation tools in current run."""
-        has_file_target = bool(self._PATH_REFERENCE.search(prompt)) or bool(
-            re.search(r"\b(?:file|archivo)\b", prompt, re.IGNORECASE)
+        request = self._user_request_text(prompt)
+        has_file_target = bool(self._PATH_REFERENCE.search(request)) or bool(
+            re.search(r"\b(?:file|archivo)\b", request, re.IGNORECASE)
         )
         directory_only = not has_file_target and bool(
-            re.search(r"\b(?:directory|folder|directorio|carpeta)\b", prompt, re.IGNORECASE)
+            re.search(r"\b(?:directory|folder|directorio|carpeta)\b", request, re.IGNORECASE)
         )
         names = (
             {"create_directory"}
@@ -1627,7 +2129,8 @@ class PydanticAgentRuntime:
         if not self._is_local_workspace_request(prompt):
             return prompt
 
-        references = list(dict.fromkeys(self._PATH_REFERENCE.findall(prompt)))
+        request = self._user_request_text(prompt)
+        references = list(dict.fromkeys(self._PATH_REFERENCE.findall(request)))
         evidence: List[Dict[str, Any]] = []
         is_mutation = self._is_workspace_mutation_request(prompt)
         if references:
@@ -1695,10 +2198,12 @@ class PydanticAgentRuntime:
         """Pre-search explicit web requests so retrieval never depends on model routing."""
         if self._is_local_workspace_request(prompt):
             return prompt
-        if not self._EXPLICIT_WEB_REQUEST.search(prompt):
+        if not self._EXPLICIT_WEB_REQUEST.search(self._user_request_text(prompt)):
             return prompt
         try:
-            evidence = self.web.web_search(prompt, max_results=5)
+            evidence = self.web.web_search(
+                self._user_request_text(prompt), max_results=5
+            )
         except WebRetrievalError as error:
             self._pending_events.append(
                 {"type": "status", "content": str(error)}
@@ -1720,22 +2225,42 @@ class PydanticAgentRuntime:
             "web_fetch only when snippets are insufficient."
         )
 
+    def _stream_agent_text(self, streamed: Any) -> Iterable[str]:
+        """Convert loop-limit exceptions into stable turn state."""
+        try:
+            yield from streamed.stream_text(delta=True, debounce_by=None)
+        except ReactLoopLimitError as error:
+            self.react.state.halted_reason = str(error)
+
     def generate_stream(self, prompt: str) -> Generator[Dict[str, Any], None, None]:
         """Run full agent loop and expose UI-neutral stream events."""
         self._pending_events.clear()
         self._tool_results_this_run.clear()
         self._denied_permissions.clear()
+        self.react.begin_turn(prompt)
+        if self.react.enabled:
+            status = self.react.status()
+            self._pending_events.append({
+                "type": "react_state",
+                "content": status["phase"],
+                "summary": f"{status['phase']} · step 0/{status['max_steps']}",
+                "details": {
+                    "phase": status["phase"],
+                    "steps": 0,
+                    "max_steps": status["max_steps"],
+                    "failures": 0,
+                    "last_tool": "",
+                    "halted_reason": "",
+                    "timeline": status["timeline"],
+                },
+            })
         self.web.begin_turn()
         if self.config.tools_enabled and self.config.auto_tool_routing:
             grounded_prompt = self._ground_local_workspace_request(prompt)
             grounded_prompt = self._ground_explicit_web_request(grounded_prompt)
         else:
             grounded_prompt = prompt
-        is_mutation = (
-            self.config.tools_enabled
-            and self.config.auto_tool_routing
-            and self._is_workspace_mutation_request(prompt)
-        )
+        is_mutation = self.config.tools_enabled and self._is_workspace_mutation_request(prompt)
         active_agent = self.mutation_agent if is_mutation else self.agent
         run_prompt = grounded_prompt
         history = self._messages or None
@@ -1746,15 +2271,22 @@ class PydanticAgentRuntime:
         attempts = self.config.max_mutation_attempts if is_mutation else 1
         for attempt in range(attempts):
             self._tool_results_this_run.clear()
-            streamed = active_agent.run_stream_sync(
-                run_prompt,
-                message_history=history,
-                usage_limits=UsageLimits(
-                    request_limit=self.config.max_model_requests
-                ),
-            )
+            try:
+                streamed = active_agent.run_stream_sync(
+                    run_prompt,
+                    message_history=history,
+                    usage_limits=UsageLimits(
+                        request_limit=self.config.max_model_requests
+                    ),
+                )
+            except ReactLoopLimitError as error:
+                output = str(error)
+                self.react.state.halted_reason = output
+                yield {"type": "status", "content": output}
+                yield {"type": "token", "content": output}
+                break
             buffered_tokens: List[str] = []
-            for content in streamed.stream_text(delta=True, debounce_by=None):
+            for content in self._stream_agent_text(streamed):
                 while self._pending_events:
                     yield self._pending_events.pop(0)
                 chunks += 1
@@ -1765,6 +2297,13 @@ class PydanticAgentRuntime:
 
             while self._pending_events:
                 yield self._pending_events.pop(0)
+
+            if self.react.state.halted_reason:
+                output = self.react.state.halted_reason
+                yield {"type": "status", "content": output}
+                yield {"type": "token", "content": output}
+                completed_messages = self._messages
+                break
 
             output = streamed.get_output()
             completed_messages = list(streamed.all_messages())
@@ -1831,9 +2370,10 @@ def get_agent_runtime(
     workspace: Optional[Path] = None,
     config: Optional[RuntimeConfig] = None,
     permission_callback: Optional[PermissionCallback] = None,
-    sandbox: Optional[DockerSandbox] = None,
+    sandbox: Optional[SandboxBackend] = None,
     task_plan_store: Optional[TaskPlanStore] = None,
     session_title_callback: Optional[SessionTitleCallback] = None,
+    workspace_context: Optional[WorkspaceContext] = None,
 ) -> PydanticAgentRuntime:
     """Create OpenCLI's local agent runtime."""
     return PydanticAgentRuntime(
@@ -1844,6 +2384,7 @@ def get_agent_runtime(
         sandbox=sandbox,
         task_plan_store=task_plan_store,
         session_title_callback=session_title_callback,
+        workspace_context=workspace_context,
     )
 
 

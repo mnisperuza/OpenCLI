@@ -13,7 +13,9 @@ def make_runtime(engine, workspace=None):
     return PydanticAgentRuntime(
         engine,
         workspace=workspace,
-        config=RuntimeConfig(persist_state=False, auto_tool_routing=True),
+        config=RuntimeConfig(
+            persist_state=False, auto_tool_routing=True, react_enabled=False
+        ),
     )
 
 
@@ -263,7 +265,9 @@ class AgentWebToolTests(TestCase):
         decisions = []
         runtime = PydanticAgentRuntime(
             engine,
-            config=RuntimeConfig(persist_state=False, auto_tool_routing=True),
+            config=RuntimeConfig(
+                persist_state=False, auto_tool_routing=True, react_enabled=False
+            ),
             permission_callback=lambda *request: decisions.append(request) or False,
         )
         client = FakeDDGS(error=AssertionError("search must not run"))
@@ -420,7 +424,9 @@ class AgentWebToolTests(TestCase):
             runtime = PydanticAgentRuntime(
                 engine,
                 workspace=workspace,
-                config=RuntimeConfig(persist_state=False, auto_tool_routing=True),
+                config=RuntimeConfig(
+                    persist_state=False, auto_tool_routing=True, react_enabled=False
+                ),
                 permission_callback=lambda *request: decisions.append(request) or True,
             )
 
@@ -443,7 +449,9 @@ class AgentWebToolTests(TestCase):
             runtime = PydanticAgentRuntime(
                 engine,
                 workspace=workspace,
-                config=RuntimeConfig(persist_state=False, auto_tool_routing=True),
+                config=RuntimeConfig(
+                    persist_state=False, auto_tool_routing=True, react_enabled=False
+                ),
                 permission_callback=lambda *_request: True,
             )
 
@@ -459,7 +467,9 @@ class AgentWebToolTests(TestCase):
             runtime = PydanticAgentRuntime(
                 DirectAnswerEngine(),
                 workspace=Path(temporary_directory),
-                config=RuntimeConfig(persist_state=False, auto_tool_routing=True),
+                config=RuntimeConfig(
+                    persist_state=False, auto_tool_routing=True, react_enabled=False
+                ),
             )
 
             events = list(runtime.generate_stream("Create missing.txt"))

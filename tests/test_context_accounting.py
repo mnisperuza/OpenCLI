@@ -1,11 +1,13 @@
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
 from main.cli import OpenCLI
-from main.context_accounting import ContextAccountingService
+from main.context_accounting import ContextAccountingService, tiktoken_counter
 from main.model_profiles import FALLBACK_PROFILE, ModelProfileRegistry
 
 
@@ -62,6 +64,19 @@ class ModelProfileTests(TestCase):
 
 
 class ContextAccountingTests(TestCase):
+    def test_tiktoken_counter_uses_known_encoding(self):
+        encoding = SimpleNamespace(
+            encode=lambda text, disallowed_special=(): list(text.split())
+        )
+        fake_tiktoken = SimpleNamespace(
+            get_encoding=lambda _name: encoding,
+            encoding_for_model=lambda _model: encoding,
+        )
+        with patch.dict(sys.modules, {"tiktoken": fake_tiktoken}):
+            counter = tiktoken_counter("model", "known")
+        self.assertIsNotNone(counter)
+        self.assertEqual(counter("three exact tokens"), 3)
+
     def test_snapshot_reserves_output_and_breaks_down_components(self):
         service = ContextAccountingService(FALLBACK_PROFILE)
         snapshot = service.snapshot({"instructions": "abcd", "history": "abcdefgh"})

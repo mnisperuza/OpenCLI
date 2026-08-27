@@ -10,6 +10,7 @@ __all__ = [
     'get_interrupt_handler', 'PydanticAgentRuntime', 'get_agent_runtime',
     'ModelBackend', 'ModelDescriptor', 'PermissionGate',
     'PermissionRequestData', 'SessionStore', 'ToolDescriptor', 'ToolProvider',
+    'AgentLoopController', 'SandboxBackend',
     'ModelCapabilityProfile', 'ModelProfileRegistry',
 ]
 
@@ -28,7 +29,7 @@ def __getattr__(name):
     if name in {
         "ModelBackend", "ModelDescriptor", "PermissionGate",
         "PermissionRequestData", "SessionStore", "ToolDescriptor",
-        "ToolProvider",
+        "ToolProvider", "AgentLoopController", "SandboxBackend",
     }:
         from main import interfaces
         return getattr(interfaces, name)

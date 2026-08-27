@@ -1,8 +1,10 @@
 import json
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
 from main.api_profiles import ApiProfileRegistry
@@ -134,6 +136,45 @@ class ApiProviderClientTests(unittest.TestCase):
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(body["max_tokens"], 2048)
 
+    def test_named_tool_choice_reaches_api_request(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        choice = {"type": "function", "function": {"name": "react_dispatch"}}
+        tools = [{"type": "function", "function": {"name": "react_dispatch"}}]
+        with patch(
+            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+        ) as call:
+            list(client.stream_chat([], tools, choice))
+        body = json.loads(call.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(body["tool_choice"], choice)
+
+    def test_named_tool_choice_rejection_retries_with_auto(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        choice = {"type": "function", "function": {"name": "react_dispatch"}}
+        tools = [{"type": "function", "function": {"name": "react_dispatch"}}]
+        rejection = HTTPError(
+            "https://api.groq.com/openai/v1/chat/completions",
+            400,
+            "unsupported tool_choice",
+            {},
+            BytesIO(b'{"error":"unsupported tool_choice"}'),
+        )
+        accepted = FakeResponse(lines=[
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"d1","function":{"name":"react_dispatch","arguments":"{\\"decision\\":\\"answer\\",\\"summary\\":\\"done\\"}"}}]}}]}\n',
+            b"data: [DONE]\n",
+        ])
+
+        with patch(
+            "main.api_providers.urlopen", side_effect=[rejection, accepted]
+        ) as call:
+            events = list(client.stream_chat([], tools, choice))
+
+        choices = [
+            json.loads(item.args[0].data.decode("utf-8"))["tool_choice"]
+            for item in call.call_args_list
+        ]
+        self.assertEqual(choices, [choice, "auto"])
+        self.assertEqual(events[0]["calls"][0]["name"], "react_dispatch")
+
     def test_stream_stops_at_hard_character_limit(self):
         lines = [
             b'data: {"choices":[{"delta":{"content":"abcdefgh"}}]}\n',
@@ -197,20 +238,49 @@ class FakeRemoteClient:
     def __init__(self):
         self.requests = []
 
-    def stream_chat(self, messages, tools):
-        self.requests.append((messages, tools))
+    def stream_chat(self, messages, tools, tool_choice="auto"):
+        self.requests.append((messages, tools, tool_choice))
         if len(self.requests) == 1:
             yield {
                 "type": "tool_calls",
                 "calls": [
                     {
-                        "id": "call_write",
-                        "name": "write_text_file",
+                        "id": "call_dispatch",
+                        "name": "react_dispatch",
                         "arguments": json.dumps(
-                            {"path": "api-created.txt", "content": "made by tool"}
+                            {
+                                "decision": "act",
+                                "summary": "File creation needs a tool",
+                                "goal": "Create api-created.txt",
+                                "paths": ["api-created.txt"],
+                            }
                         ),
                     }
                 ],
+            }
+        elif len(self.requests) == 2:
+            yield {
+                "type": "tool_calls",
+                "calls": [{
+                    "id": "call_write",
+                    "name": "write_text_file",
+                    "arguments": json.dumps(
+                        {"path": "api-created.txt", "content": "made by tool"}
+                    ),
+                }],
+            }
+        elif len(self.requests) == 3:
+            yield {
+                "type": "tool_calls",
+                "calls": [{
+                    "id": "call_critique",
+                    "name": "critique_and_plan",
+                    "arguments": json.dumps({
+                        "progress": "File created",
+                        "evidence": ["write succeeded"],
+                        "complete": True,
+                    }),
+                }],
             }
         else:
             yield {"type": "token", "content": "Created api-created.txt."}
@@ -222,6 +292,27 @@ class FakeRemoteEngine:
 
     def __init__(self):
         self.api_client = FakeRemoteClient()
+        self.MODELS = {"api": {"path": self.api_client.model}}
+
+
+class ProseOnlyRemoteClient:
+    provider_name = "Broken API"
+    model = "broken/model"
+
+    def __init__(self):
+        self.requests = []
+
+    def stream_chat(self, messages, tools, tool_choice="auto"):
+        self.requests.append((messages, tools, tool_choice))
+        yield {"type": "token", "content": "I'll inspect it now."}
+
+
+class ProseOnlyRemoteEngine:
+    backend = "remote_api"
+    current_mode = "api"
+
+    def __init__(self):
+        self.api_client = ProseOnlyRemoteClient()
         self.MODELS = {"api": {"path": self.api_client.model}}
 
 
@@ -249,6 +340,42 @@ class RemoteAgentIntegrationTests(unittest.TestCase):
             }
             self.assertIn("write_text_file", names)
             self.assertTrue(any(event.get("type") == "token" for event in events))
+            phases = [
+                event.get("content") for event in events
+                if event.get("type") == "react_state"
+            ]
+            self.assertIn("dispatch", phases)
+            self.assertIn("critique", phases)
+            self.assertIn("finish", phases)
+
+    def test_prose_only_dispatch_falls_back_without_running_tools(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            engine = ProseOnlyRemoteEngine()
+            runtime = PydanticAgentRuntime(
+                engine,
+                workspace=workspace,
+                config=RuntimeConfig(
+                    persist_state=False,
+                    react_decision_retries=2,
+                ),
+            )
+
+            events = list(runtime.generate_stream("Review current workspace"))
+
+        named_choices = [request[2] for request in engine.api_client.requests[:2]]
+        expected = {
+            "type": "function",
+            "function": {"name": "react_dispatch"},
+        }
+        self.assertEqual(named_choices, [expected, expected])
+        self.assertEqual(runtime.react.status()["phase"], "ask_user")
+        self.assertEqual(runtime.react.status()["steps"], 0)
+        self.assertFalse(any(event.get("type") == "tool" for event in events))
+        self.assertTrue(any(
+            "failed after 2 attempts" in str(event.get("content", ""))
+            for event in events
+        ))
 
 
 if __name__ == "__main__":

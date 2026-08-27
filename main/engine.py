@@ -207,6 +207,7 @@ class FileHandler:
         ] = None,
     ):
         self.current_path = Path.cwd()
+        self.workspace_root: Optional[Path] = None
         self.last_file = None
         self.permission_callback = permission_callback
 
@@ -237,21 +238,33 @@ class FileHandler:
         try:
             path = Path(path_str.strip().strip('"').strip("'"))
             if path.is_absolute():
-                return path if path.exists() else None
+                resolved = path.resolve()
+                return resolved if self._accessible_path(resolved) else None
 
             # Try relative to current directory
-            resolved = self.current_path / path
-            if resolved.exists():
+            resolved = (self.current_path / path).resolve()
+            if self._accessible_path(resolved):
                 return resolved
 
             # Try relative to home
-            resolved = Path.home() / path
-            if resolved.exists():
+            resolved = (Path.home() / path).resolve()
+            if self.workspace_root is None and self._accessible_path(resolved):
                 return resolved
 
             return None
         except:
             return None
+
+    def _accessible_path(self, path: Path) -> bool:
+        if not path.exists():
+            return False
+        if self.workspace_root is None:
+            return True
+        try:
+            path.relative_to(self.workspace_root.resolve())
+        except ValueError:
+            return False
+        return True
 
     def read_file(self, path: Path) -> Tuple[bool, str]:
         """Read a file safely"""
@@ -283,11 +296,13 @@ class FileHandler:
                 return False, None, f"Permission denied: {path}"
             if not path.exists():
                 return False, None, f"File not found: {path}"
-            image = Image.open(path).convert("RGB")
+            from main.media import load_model_image
+
+            image = load_model_image(path)
             self.last_file = path
             return True, image, ""
-        except Exception as e:
-            return False, None, f"Error loading image: {e}"
+        except Exception as error:
+            return False, None, f"Error loading image: {error}"
 
     def get_clipboard_image(self) -> Optional[ImageAttachment]:
         """Read an image directly from the Windows clipboard when available."""
@@ -315,7 +330,9 @@ class FileHandler:
             return None
 
         if Image is not None and isinstance(clipped, Image.Image):
-            return ImageAttachment(source="clipboard", image=clipped.convert("RGB"))
+            from main.media import normalize_image
+
+            return ImageAttachment(source="clipboard", image=normalize_image(clipped))
 
         return None
 

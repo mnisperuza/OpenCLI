@@ -222,6 +222,7 @@ class OpenAICompatibleClient:
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
+        tool_choice: Any = "auto",
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.model:
             raise ApiProviderError("No API model selected")
@@ -234,7 +235,8 @@ class OpenAICompatibleClient:
             body["max_tokens"] = self.max_output_tokens
         if tools:
             body["tools"] = tools
-            body["tool_choice"] = "auto"
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
         request = Request(
             f"{self.definition.base_url}/chat/completions",
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
@@ -320,6 +322,17 @@ class OpenAICompatibleClient:
             raise
         except HTTPError as error:
             body_text = error.read().decode("utf-8", errors="replace")
+            if (
+                tools
+                and tool_choice is not None
+                and tool_choice != "auto"
+                and tool_choice != "none"
+                and error.code in {400, 404, 422}
+            ):
+                # Some OpenAI-compatible providers expose tools but reject
+                # required/named tool_choice. Strict prompt + host validation remain.
+                yield from self.stream_chat(messages, tools, "auto")
+                return
             raise self._safe_error(error, body_text) from error
         except (OSError, URLError) as error:
             raise self._safe_error(error) from error

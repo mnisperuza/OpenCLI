@@ -51,7 +51,10 @@ class ModelBackend(Protocol):
     backend: str
 
     def stream_chat(
-        self, messages: Sequence[Any], tools: Sequence[Mapping[str, Any]]
+        self,
+        messages: Sequence[Any],
+        tools: Sequence[Mapping[str, Any]],
+        tool_choice: Any = "auto",
     ) -> Any: ...
 
 
@@ -78,11 +81,52 @@ class SessionStore(Protocol):
     def load(self, path: Path) -> str: ...
 
 
+class SandboxBackend(Protocol):
+    """Execute bounded argv commands outside the host process."""
+
+    backend: str
+
+    def is_available(self) -> bool: ...
+
+    def run(
+        self,
+        command: Sequence[str],
+        *,
+        write_access: bool = False,
+        timeout_seconds: Optional[int] = None,
+        cwd: str = ".",
+    ) -> Mapping[str, Any]: ...
+
+    def status(self) -> Mapping[str, Any]: ...
+
+
+class AgentLoopController(Protocol):
+    """Own deterministic budgets around model-selected tool actions."""
+
+    def begin_turn(self, goal: str) -> None: ...
+
+    def dispatch(self, decision: str, *, summary: str = "") -> Mapping[str, Any]: ...
+
+    def before_tool(self, name: str, arguments: Any) -> int: ...
+
+    def after_tool(self, event: Mapping[str, Any]) -> None: ...
+
+    def submit_critique(self, critique: Mapping[str, Any]) -> Mapping[str, Any]: ...
+
+    def loop_context(self) -> Mapping[str, Any]: ...
+
+    def fallback_to_user(self, reason: str) -> Mapping[str, Any]: ...
+
+    def status(self) -> Mapping[str, Any]: ...
+
+
 __all__ = [
     "ModelBackend",
     "ModelDescriptor",
     "PermissionGate",
     "PermissionRequestData",
+    "AgentLoopController",
+    "SandboxBackend",
     "SessionStore",
     "ToolDescriptor",
     "ToolProvider",

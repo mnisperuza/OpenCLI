@@ -45,16 +45,19 @@ dependencies = [
     "bitsandbytes>=0.45.0",
     "hqq>=0.2.8.post1",          # INT8 HQQ backend for Q8 KV-cache quantization
     "rich>=14.0.0",
+    "pillow>=11.0.0,<13",
     "prompt_toolkit>=3.0.43",
     "questionary>=1.10.0",
     "textual>=7.0.0",
+    "tiktoken>=0.7.0,<1",
     "tomli>=2.0.0; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 linux = ["bitsandbytes>=0.43.0"]
 perf = ["xformers>=0.0.25"]
-full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25"]
+sandbox = ["e2b>=2.13,<3"]
+full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25", "e2b>=2.13,<3"]
 
 [project.scripts]
 opencli = "main.cli:main"

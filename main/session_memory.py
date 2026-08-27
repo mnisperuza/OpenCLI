@@ -17,6 +17,7 @@ class SessionRecord:
     path: Path
     created_at: datetime
     title: str = ""
+    current_directory: str = "."
     notes: List[str] = field(default_factory=list)
     compactions: List["CompactionRecord"] = field(default_factory=list)
     tool_archives: List["ToolArchiveRecord"] = field(default_factory=list)
@@ -79,7 +80,8 @@ class SessionMemoryStore:
             f"- Session: `{record.session_id}`\n"
             f"- Created: `{record.created_at.isoformat(timespec='seconds')}`\n"
             f"- Title: {self.clean_title(record.title) or '_Untitled_'}\n"
-            f"- Workspace: `{self.workspace}`\n\n"
+            f"- Workspace: `{self.workspace}`\n"
+            f"- Current directory: `{self.clean_current_directory(record.current_directory)}`\n\n"
             "## Notes\n\n"
             f"{notes}\n\n"
             "## Compact History\n\n"
@@ -117,6 +119,9 @@ class SessionMemoryStore:
             path=resolved,
             created_at=created,
             title="" if raw_title == "_Untitled_" else self.clean_title(raw_title),
+            current_directory=self.clean_current_directory(
+                self._metadata_value(content, "Current directory")
+            ),
             notes=self._parse_notes(self._markdown_section(content, "Notes")),
             compactions=self._parse_compactions(
                 self._markdown_section(content, "Compact History")
@@ -179,6 +184,18 @@ class SessionMemoryStore:
         if len(cleaned) > cls.MAX_TITLE_CHARS:
             cleaned = cleaned[: cls.MAX_TITLE_CHARS].rstrip()
         return cleaned
+
+    @staticmethod
+    def clean_current_directory(path: str | None) -> str:
+        cleaned = str(path or ".").strip().replace("\\", "/")
+        if not cleaned or cleaned == ".":
+            return "."
+        if cleaned.startswith("/") or ":" in cleaned:
+            return "."
+        parts = [part for part in cleaned.split("/") if part and part != "."]
+        if any(part == ".." for part in parts):
+            return "."
+        return "/".join(parts) or "."
 
     def remember(self, record: SessionRecord, note: str, transcript: str) -> None:
         cleaned = " ".join(note.split()).strip()

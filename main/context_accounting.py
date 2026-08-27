@@ -9,6 +9,30 @@ from typing import Callable, Dict, Mapping, Optional
 from .model_profiles import ModelCapabilityProfile
 
 
+def tiktoken_counter(
+    model_id: str,
+    encoding_name: Optional[str] = None,
+) -> Optional[Callable[[str], int]]:
+    """Return an exact tiktoken counter only for a known model or encoding."""
+    try:
+        import tiktoken
+    except ImportError:
+        return None
+    try:
+        encoding = (
+            tiktoken.get_encoding(encoding_name)
+            if encoding_name
+            else tiktoken.encoding_for_model(model_id)
+        )
+    except (KeyError, ValueError):
+        return None
+
+    def count(text: str) -> int:
+        return len(encoding.encode(text, disallowed_special=()))
+
+    return count
+
+
 @dataclass(frozen=True)
 class ContextSnapshot:
     profile: ModelCapabilityProfile
@@ -126,4 +150,5 @@ __all__ = [
     "ContextSnapshot",
     "SessionUsage",
     "format_token_count",
+    "tiktoken_counter",
 ]

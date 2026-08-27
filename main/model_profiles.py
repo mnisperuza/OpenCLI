@@ -157,6 +157,7 @@ class ModelProfileRegistry:
             supports_tools=bool(metadata.get("supports_tools", False)),
             supports_vision=bool(metadata.get("supports_vision", False)),
             supports_reasoning=bool(metadata.get("has_thinking", False)),
+            tokenizer=(str(metadata["tokenizer"]) if metadata.get("tokenizer") else None),
             source="model metadata",
         )
 
