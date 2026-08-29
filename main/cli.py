@@ -651,6 +651,7 @@ class OpenCLI:
         self.api_model = None
         self._api_key = None
         self._api_model_metadata = {}
+        self.reasoning_level = "off"
         self.sandbox_enabled = False
         self.sandbox = SandboxManager(self.workspace_context.root)
         self.session_memory = SessionMemoryStore(self.workspace_context.root)
@@ -1258,6 +1259,42 @@ class OpenCLI:
         self.context_accounting.set_profile(profile, self._tokenizer_counter(profile))
         return profile
 
+    def _apply_reasoning_profile(self, profile, *, reset: bool = False) -> None:
+        levels = tuple(profile.reasoning_levels)
+        if reset:
+            self.reasoning_level = (
+                profile.reasoning_default
+                if profile.reasoning_control != "none"
+                else "off"
+            )
+        if self.reasoning_level != "off" and self.reasoning_level not in levels:
+            self.reasoning_level = "off"
+        if self.engine is not None:
+            self.engine.reasoning_control = profile.reasoning_control
+            self.engine.reasoning_effort = self.reasoning_level
+            client = getattr(self.engine, "api_client", None)
+            if client is not None:
+                client.reasoning_control = profile.reasoning_control
+                client.reasoning_effort = self.reasoning_level
+
+    def configure_reasoning(self, value: str) -> str:
+        profile = self._refresh_context_profile()
+        levels = tuple(profile.reasoning_levels)
+        value = value.casefold().strip() or "status"
+        if value == "status":
+            available = ", ".join(("off", *levels)) if levels else "unavailable"
+            return (
+                f"Reasoning: {self.reasoning_level}; controls: {available}; "
+                f"adapter: {profile.reasoning_control}."
+            )
+        if profile.reasoning_control == "none" or not levels:
+            return "Reasoning level control unavailable for active model."
+        if value != "off" and value not in levels:
+            return f"Invalid reasoning level. Use: off, {', '.join(levels)}."
+        self.reasoning_level = value
+        self._apply_reasoning_profile(profile)
+        return f"Reasoning level: {value}."
+
     def _context_components(self, current_prompt: str = "") -> dict:
         if self.agent_runtime:
             components = self.agent_runtime.context_components(current_prompt)
@@ -1544,6 +1581,16 @@ class OpenCLI:
         max_tokens = self._model_prompt("Max output tokens", "8192")
         temperature = self._model_prompt("Temperature", "0.7")
         has_thinking = self._model_confirm("Model supports thinking mode?", False)
+        reasoning_control = "none"
+        reasoning_default = "off"
+        if has_thinking:
+            reasoning_control = self._model_prompt(
+                "Native reasoning control (none/chat_template_kwargs)", "none"
+            )
+            if reasoning_control.casefold() != "none":
+                reasoning_default = self._model_prompt(
+                    "Default reasoning level (off/low/medium/high)", "medium"
+                )
         supports_vision = self._model_confirm("Model supports vision input?", False)
         values = {
             "Name": name,
@@ -1554,6 +1601,8 @@ class OpenCLI:
             "Max output": max_tokens,
             "Temperature": temperature,
             "Thinking": has_thinking,
+            "Reasoning control": reasoning_control,
+            "Reasoning default": reasoning_default,
             "Vision": supports_vision,
         }
         self._render_model_config(values)
@@ -1570,6 +1619,8 @@ class OpenCLI:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 has_thinking=has_thinking,
+                reasoning_control=reasoning_control,
+                reasoning_default=reasoning_default,
                 supports_vision=supports_vision,
                 reserved_keys=set(self.MODELS) | set(self.BUILTIN_MODELS),
             )
@@ -1779,6 +1830,7 @@ class OpenCLI:
             engine_models["api"]["supports_tools"] = profile.supports_tools
             engine_models["api"]["supports_vision"] = profile.supports_vision
             engine_models["api"]["has_thinking"] = profile.supports_reasoning
+        self._apply_reasoning_profile(profile, reset=True)
         self.server_stopped_by_user = False
         self.agent_runtime = None
         if metadata:
@@ -1950,6 +2002,15 @@ class OpenCLI:
         # Help
         if lower in ["/help", "/h"]:
             self.show_help()
+            return True
+
+        if lower == "/info":
+            self.show_info()
+            return True
+
+        if lower == "/thinking" or lower.startswith("/thinking "):
+            _, _, value = user_input.strip().partition(" ")
+            print(self.configure_reasoning(value))
             return True
 
         # Status
@@ -2518,6 +2579,7 @@ class OpenCLI:
         if success:
             self.mode = mode
             self.quant = quant
+            self._apply_reasoning_profile(profile, reset=True)
             self.server_stopped_by_user = False
             if render:
                 print()
@@ -2550,6 +2612,13 @@ class OpenCLI:
                 aliases = f" ({', '.join(spec.aliases)})" if spec.aliases else ""
                 print(f"  {spec.usage:<{width}}  {spec.description}{aliases}")
             print()
+
+    def show_info(self) -> None:
+        """Show concise project and creator information."""
+        print(f"\n{Colors.BOLD}OpenCLI v{self.VERSION}{Colors.RESET}")
+        print("  Local-first AI coding assistant")
+        print("  Creator: Matias Nisperuza")
+        print("  Use /help for commands and /status for runtime details.\n")
 
     def _show_help_legacy(self):
         """Show help with gradient model names"""

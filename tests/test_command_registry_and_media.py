@@ -3,7 +3,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from PIL import Image
+from unittest.mock import patch
 
+from main.cli import OpenCLI
 from main.command_registry import COMMAND_SPECS, match_commands
 from main.media import MediaError, load_model_image, normalize_image
 
@@ -18,6 +20,13 @@ class CommandRegistryTests(TestCase):
         matches = match_commands("/cont")
         self.assertEqual(matches[0].command, "/context")
         self.assertIn("context", matches[0].description.casefold())
+
+    def test_info_command_is_registered_and_dispatched(self):
+        self.assertIn("/info", [spec.command for spec in COMMAND_SPECS])
+        cli = OpenCLI(dry_run=True)
+        with patch.object(cli, "show_info") as show_info:
+            self.assertTrue(cli.handle_command("/info"))
+        show_info.assert_called_once()
 
 
 class MediaFoundationTests(TestCase):

@@ -25,6 +25,9 @@ class ModelCapabilityProfile:
     supports_tools: bool
     supports_vision: bool = False
     supports_reasoning: bool = False
+    reasoning_control: str = "none"
+    reasoning_levels: tuple[str, ...] = ()
+    reasoning_default: str = "off"
     tokenizer: Optional[str] = None
     source: str = "built-in"
 
@@ -61,6 +64,9 @@ BUILTIN_PROFILES = (
         max_output_tokens=16_384,
         supports_tools=True,
         supports_reasoning=True,
+        reasoning_control="chat_template_kwargs",
+        reasoning_levels=("low", "medium", "high"),
+        reasoning_default="medium",
     ),
     ModelCapabilityProfile(
         key="devstral-small-2-24b",
@@ -97,6 +103,9 @@ class ModelProfileRegistry:
         "supports_tools",
         "supports_vision",
         "supports_reasoning",
+        "reasoning_control",
+        "reasoning_levels",
+        "reasoning_default",
         "tokenizer",
     }
 
@@ -157,6 +166,9 @@ class ModelProfileRegistry:
             supports_tools=bool(metadata.get("supports_tools", False)),
             supports_vision=bool(metadata.get("supports_vision", False)),
             supports_reasoning=bool(metadata.get("has_thinking", False)),
+            reasoning_control=str(metadata.get("reasoning_control", "none")),
+            reasoning_levels=tuple(metadata.get("reasoning_levels", ())),
+            reasoning_default=str(metadata.get("reasoning_default", "off")),
             tokenizer=(str(metadata["tokenizer"]) if metadata.get("tokenizer") else None),
             source="model metadata",
         )
@@ -181,6 +193,15 @@ class ModelProfileRegistry:
             for name in ("supports_tools", "supports_vision", "supports_reasoning"):
                 if name in changes and not isinstance(changes[name], bool):
                     raise ValueError(f"{name} must be true or false")
+            if "reasoning_levels" in changes:
+                levels = tuple(str(level).casefold() for level in changes["reasoning_levels"])
+                if not levels or any(level not in {"low", "medium", "high"} for level in levels):
+                    raise ValueError("reasoning_levels must contain low, medium, or high")
+                changes["reasoning_levels"] = levels
+            if changes.get("reasoning_control", profile.reasoning_control) not in {
+                "none", "chat_template_kwargs", "api_parameter"
+            }:
+                raise ValueError("invalid reasoning_control")
             result = replace(profile, **changes, source=f"workspace override: {identifier}")
             if not 512 <= result.context_window <= 1_000_000:
                 raise ValueError("context_window must be between 512 and 1000000")

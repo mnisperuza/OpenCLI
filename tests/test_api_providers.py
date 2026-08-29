@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
@@ -30,6 +30,17 @@ class FakeResponse:
 
 
 class ApiProviderClientTests(unittest.TestCase):
+    def test_cancel_closes_active_api_stream(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        response = Mock()
+        client._active_response = response
+
+        client.cancel()
+
+        self.assertTrue(client._cancel_requested.is_set())
+        response.close.assert_called_once_with()
+        self.assertTrue(client.capability_report()["cancellation"])
+
     def test_model_id_validation_preserves_provider_identifier(self):
         self.assertEqual(
             OpenAICompatibleClient("groq", "secret", "Meta-Llama/model").model,
@@ -135,6 +146,27 @@ class ApiProviderClientTests(unittest.TestCase):
             list(client.stream_chat([], []))
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
         self.assertEqual(body["max_tokens"], 2048)
+
+    def test_native_reasoning_effort_reaches_supported_api_request(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        client.reasoning_control = "api_parameter"
+        client.reasoning_effort = "high"
+        with patch(
+            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+        ) as call:
+            list(client.stream_chat([], []))
+        body = json.loads(call.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(body["reasoning_effort"], "high")
+
+    def test_reasoning_effort_omitted_without_native_adapter(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        client.reasoning_effort = "high"
+        with patch(
+            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+        ) as call:
+            list(client.stream_chat([], []))
+        body = json.loads(call.call_args.args[0].data.decode("utf-8"))
+        self.assertNotIn("reasoning_effort", body)
 
     def test_named_tool_choice_reaches_api_request(self):
         client = OpenAICompatibleClient("groq", "secret", "model")

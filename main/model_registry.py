@@ -79,6 +79,8 @@ class ModelRegistry:
         max_tokens: Any = 8192,
         temperature: Any = 0.7,
         has_thinking: bool = False,
+        reasoning_control: str = "none",
+        reasoning_default: str = "off",
         supports_vision: bool = False,
         reserved_keys: Optional[set[str]] = None,
     ) -> str:
@@ -117,6 +119,17 @@ class ModelRegistry:
             self._number(max_tokens, "Max output tokens", 64, context_size // 2)
         )
         temp = self._number(temperature, "Temperature", 0.0, 2.0)
+        reasoning_control = reasoning_control.strip().casefold()
+        if reasoning_control not in {"none", "chat_template_kwargs"}:
+            raise ModelRegistryError(
+                "Reasoning control must be none or chat_template_kwargs"
+            )
+        reasoning_default = reasoning_default.strip().casefold()
+        if reasoning_default not in {"off", "low", "medium", "high"}:
+            raise ModelRegistryError("Reasoning default must be off, low, medium, or high")
+        if not has_thinking:
+            reasoning_control = "none"
+            reasoning_default = "off"
         self._models[key] = {
             "name": display_name,
             "display_name": display_name,
@@ -133,6 +146,11 @@ class ModelRegistry:
             "note": "User-added GGUF model",
             "usage": "User-added model",
             "has_thinking": bool(has_thinking),
+            "reasoning_control": reasoning_control,
+            "reasoning_levels": (
+                ["low", "medium", "high"] if reasoning_control != "none" else []
+            ),
+            "reasoning_default": reasoning_default,
             "supports_vision": bool(supports_vision),
             "backend": "llama_cpp",
             "locked": False,

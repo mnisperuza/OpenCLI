@@ -26,6 +26,7 @@ class CommandSpec:
 
 COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/help", "/help", "Show command reference", "General", ("/h",)),
+    CommandSpec("/info", "/info", "Show OpenCLI project information", "General"),
     CommandSpec("/status", "/status", "Show runtime status", "General"),
     CommandSpec("/context", "/context", "Show context usage", "General"),
     CommandSpec("/usage", "/usage", "Show session token usage", "General"),
@@ -42,6 +43,7 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/plan", "/plan [show|add STEP|set ID STATUS|clear]", "Manage session task plan", "Agent"),
     CommandSpec("/react", "/react [on|off|status]", "Control strict ReAct dispatcher", "Agent"),
     CommandSpec("/think", "/think PROMPT", "Send with supported reasoning mode", "Agent"),
+    CommandSpec("/thinking", "/thinking off|low|medium|high|status", "Set native reasoning effort", "Agent"),
     CommandSpec("/web", "/web on|off|always|ask", "Set web access policy", "Tools"),
     CommandSpec("/sandbox", "/sandbox ACTION", "Control isolated command backend", "Tools"),
     CommandSpec("/permissions", "/permissions [reset]", "Show workspace permissions", "Tools"),

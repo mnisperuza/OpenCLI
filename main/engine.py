@@ -641,9 +641,13 @@ class OpenCLIEngine:
         self.processor = None
         self.backend = None
         self.api_client = None
+        self.reasoning_control = "none"
+        self.reasoning_effort = "off"
         self._llama_process = None
         self._llama_log = None
         self._llama_log_path = None
+        self._response_lock = threading.Lock()
+        self._active_generation_response = None
         atexit.register(self.shutdown)
         self.current_mode = "auto"  # Changed from "mini"
         self.current_quant = "int4"
@@ -1292,6 +1296,13 @@ class OpenCLIEngine:
             "repeat_last_n": model_info.get("repeat_last_n", 128),
             "stop": ["<|im_end|>", "<|endoftext|>", "\nUser:", "\nuser:"],
         }
+        if (
+            getattr(self, "reasoning_control", "none") == "chat_template_kwargs"
+            and getattr(self, "reasoning_effort", "off") in {"low", "medium", "high"}
+        ):
+            request_body["chat_template_kwargs"] = {
+                "reasoning_effort": self.reasoning_effort
+            }
         request = Request(
             f"{self._llama_cpp_url()}/chat/completions",
             data=json.dumps(request_body).encode("utf-8"),
@@ -1301,8 +1312,14 @@ class OpenCLIEngine:
         response_text = ""
         chunks = 0
         streamed_tool_calls: Dict[int, Dict[str, str]] = {}
+        response_handle = None
         try:
-            with urlopen(request, timeout=300) as response:
+            response_handle = urlopen(request, timeout=300)
+            response_lock = getattr(self, "_response_lock", None)
+            if response_lock is not None:
+                with response_lock:
+                    self._active_generation_response = response_handle
+            with response_handle as response:
                 for raw_line in response:
                     if self.interrupt_handler.is_interrupted():
                         yield {"type": "status", "content": "\n[Generation stopped by user]"}
@@ -1353,11 +1370,20 @@ class OpenCLIEngine:
                             )
                         elif arguments:
                             state["arguments"] += str(arguments)
-        except (URLError, OSError) as error:
+        except (URLError, OSError, ValueError) as error:
+            if self.interrupt_handler.is_interrupted():
+                yield {"type": "status", "content": "Generation stopped by user."}
+                return
             detail = self._llama_log_tail()
             suffix = f" Server log: {detail}" if detail else ""
             yield {"type": "error", "content": f"llama.cpp request failed: {error}.{suffix}"}
             return
+        finally:
+            response_lock = getattr(self, "_response_lock", None)
+            if response_lock is not None:
+                with response_lock:
+                    if self._active_generation_response is response_handle:
+                        self._active_generation_response = None
 
         for index in sorted(streamed_tool_calls):
             tool_call = streamed_tool_calls[index]
@@ -1581,8 +1607,22 @@ class OpenCLIEngine:
         return False
 
     def stop_generation(self):
-        """Stop current generation"""
+        """Stop model work and actively close blocking HTTP streams."""
         self.interrupt_handler.interrupt()
+        client = self.api_client
+        cancel = getattr(client, "cancel", None)
+        if callable(cancel):
+            cancel()
+        response = None
+        response_lock = getattr(self, "_response_lock", None)
+        if response_lock is not None:
+            with response_lock:
+                response = self._active_generation_response
+        if response is not None:
+            try:
+                response.close()
+            except (OSError, ValueError):
+                pass
 
     def is_generating(self) -> bool:
         return self._generating

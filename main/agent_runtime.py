@@ -1015,6 +1015,8 @@ class LocalModelAdapter:
             found_call = False
             buffered_text: List[str] = []
             for event in events:
+                if event.get("type") == "cancelled":
+                    return
                 if event.get("type") == "output_limit":
                     message = str(event.get("content") or "API output limit reached.")
                     if self.event_sink:
@@ -3309,6 +3311,10 @@ class PydanticAgentRuntime:
                     buffered_tokens.append(content)
                 else:
                     yield {"type": "token", "content": content}
+
+            if self._cancel_requested.is_set():
+                cancelled = True
+                output = "Generation cancelled."
 
             if cancelled:
                 yield {"type": "status", "content": "Generation cancelled."}

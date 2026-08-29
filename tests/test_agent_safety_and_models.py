@@ -10,6 +10,7 @@ from main.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, Runtim
 from main.api_profiles import ApiProfileRegistry
 from main.cli import OpenCLI
 from main.model_registry import ModelRegistry, ModelRegistryError
+from main.model_profiles import BUILTIN_PROFILES
 from main.permissions import PermissionManager
 from main.sandbox import DockerSandbox
 
@@ -138,6 +139,14 @@ class WorkspaceToolSafetyTests(TestCase):
 
 
 class ModelRegistryTests(TestCase):
+    def test_reasoning_command_validates_active_profile(self):
+        cli = OpenCLI(dry_run=True)
+        profile = next(item for item in BUILTIN_PROFILES if item.key == "gpt-oss-20b")
+        with patch.object(cli, "_refresh_context_profile", return_value=profile):
+            self.assertEqual(cli.configure_reasoning("high"), "Reasoning level: high.")
+            self.assertEqual(cli.reasoning_level, "high")
+            self.assertIn("Invalid reasoning level", cli.configure_reasoning("ultra"))
+
     def test_local_profile_persists_and_cannot_replace_builtin_key(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -162,6 +171,24 @@ class ModelRegistryTests(TestCase):
                     path=str(model_file),
                     reserved_keys={"auto"},
                 )
+
+    def test_native_reasoning_profile_persists_levels(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            model_file = root / "reasoning.gguf"
+            model_file.write_bytes(b"GGUF")
+            registry = ModelRegistry(root / "models.json")
+            key = registry.add(
+                name="Reasoning GGUF",
+                source_type="local",
+                path=str(model_file),
+                has_thinking=True,
+                reasoning_control="chat_template_kwargs",
+                reasoning_default="high",
+            )
+            model = registry.models[key]
+            self.assertEqual(model["reasoning_default"], "high")
+            self.assertEqual(model["reasoning_levels"], ["low", "medium", "high"])
 
     def test_context_bar_shows_no_model_until_inference_is_loaded(self):
         cli = OpenCLI(dry_run=True)

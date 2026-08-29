@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, List, Optional
 from urllib.error import HTTPError, URLError
@@ -70,9 +71,25 @@ class OpenAICompatibleClient:
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens: Optional[int] = None
         self.max_stream_chars: Optional[int] = 96_000
+        self.reasoning_control = "none"
+        self.reasoning_effort = "off"
         self._model_metadata: Dict[str, Dict[str, Any]] = {}
         self.reliability = ProviderReliabilityController()
         self._capability_overrides: Dict[str, Any] = {}
+        self._cancel_requested = threading.Event()
+        self._response_lock = threading.Lock()
+        self._active_response = None
+
+    def cancel(self) -> None:
+        """Cancel active SSE request and unblock its reader immediately."""
+        self._cancel_requested.set()
+        with self._response_lock:
+            response = self._active_response
+        if response is not None:
+            try:
+                response.close()
+            except (OSError, ValueError):
+                pass
 
     @staticmethod
     def normalize_model_id(value: str) -> str:
@@ -239,7 +256,7 @@ class OpenAICompatibleClient:
             context_window=self._first_positive_int(metadata.get("context")),
             max_output_tokens=self._first_positive_int(metadata.get("max_tokens"), self.max_output_tokens),
             tokenizer="provider_reported_or_tiktoken",
-            cancellation=False,
+            cancellation=True,
             observed_failures=self.reliability.status()["consecutive_failures"],
         )
         return {**profile.as_dict(), "transport": self.reliability.status()}
@@ -252,6 +269,7 @@ class OpenAICompatibleClient:
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.model:
             raise ApiProviderError("No API model selected")
+        self._cancel_requested.clear()
         body: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -259,6 +277,11 @@ class OpenAICompatibleClient:
         }
         if isinstance(self.max_output_tokens, int) and self.max_output_tokens > 0:
             body["max_tokens"] = self.max_output_tokens
+        if (
+            self.reasoning_control == "api_parameter"
+            and self.reasoning_effort in {"low", "medium", "high"}
+        ):
+            body["reasoning_effort"] = self.reasoning_effort
         if tools:
             body["tools"] = tools
             if tool_choice is not None:
@@ -272,12 +295,18 @@ class OpenAICompatibleClient:
         calls: Dict[int, Dict[str, str]] = {}
         emitted_chars = 0
         provider_limited = False
+        response_handle = None
         try:
             response_handle = self.reliability.call(
                 lambda: urlopen(request, timeout=self.timeout_seconds)
             )
+            with self._response_lock:
+                self._active_response = response_handle
             with response_handle as response:
                 for raw_line in response:
+                    if self._cancel_requested.is_set():
+                        yield {"type": "cancelled", "content": "Generation cancelled."}
+                        return
                     line = raw_line.decode("utf-8", errors="replace").strip()
                     if not line.startswith("data:"):
                         continue
@@ -364,8 +393,15 @@ class OpenAICompatibleClient:
                 yield from self.stream_chat(messages, tools, "auto")
                 return
             raise self._safe_error(error, body_text) from error
-        except (OSError, URLError) as error:
+        except (OSError, URLError, ValueError) as error:
+            if self._cancel_requested.is_set():
+                yield {"type": "cancelled", "content": "Generation cancelled."}
+                return
             raise self._safe_error(error) from error
+        finally:
+            with self._response_lock:
+                if self._active_response is response_handle:
+                    self._active_response = None
 
         if provider_limited:
             yield {

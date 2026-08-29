@@ -9,12 +9,61 @@ from textual.widgets import Button, Collapsible, Footer, Header, Markdown, Optio
 from main.cli import OpenCLI, main
 from main.session_memory import SessionMemoryStore
 from main.task_plan import TaskPlanItem, TaskPlanStore
-from main.tui import ChoiceScreen, ConfirmScreen, FormScreen, OpenCLITui, PermissionScreen
+from main.tui import (
+    ACTIVITY_LABELS, ChoiceScreen, ConfirmScreen, FormScreen, OpenCLITui,
+    PermissionScreen,
+)
 from main.permissions import PermissionDecision, PermissionRequest
 from main.ui_events import AgentEvent
 
 
 class OpenCLITuiTests(IsolatedAsyncioTestCase):
+    async def test_escape_during_generation_requests_transport_cancel(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            with patch.object(cli, "_request_generation_stop") as stop:
+                async with app.run_test() as pilot:
+                    app._set_busy(True, "Generating")
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    stop.assert_called_once_with()
+                    self.assertIn("closing stream", app._activity_message)
+
+    async def test_dynamic_activity_stops_on_first_token(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                self.assertGreaterEqual(len(ACTIVITY_LABELS), 30)
+                app._start_generation_activity()
+                self.assertTrue(app._activity_dynamic)
+                first_label = app._activity_label_index
+                for _ in range(20):
+                    app._refresh_activity_clock()
+                self.assertEqual(app._activity_label_index, first_label)
+                app._begin_assistant()
+                app._handle_event(AgentEvent("token", "Hello"))
+                await pilot.pause()
+                self.assertFalse(app._activity_dynamic)
+                self.assertEqual(app._activity_message, "Responding · Escape stops")
+
+                app._start_generation_activity()
+                self.assertNotEqual(app._activity_label_index, first_label)
+
+    async def test_real_activity_state_overrides_random_label(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test():
+                app._start_generation_activity()
+                app._handle_event(AgentEvent("tool", name="read_text_file"))
+                self.assertFalse(app._activity_dynamic)
+                self.assertIn("Using tool", app._activity_message)
+
     async def test_mount_shows_agent_controls_and_context(self):
         with TemporaryDirectory() as directory:
             cli = OpenCLI(dry_run=True)
@@ -186,6 +235,27 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 await pilot.pause()
             self.assertEqual(forms, [{"name": "Open"}])
             self.assertEqual(confirms, [False])
+
+    async def test_form_save_has_terminal_safe_shortcuts_and_enter_fallback(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            saved = []
+            async with app.run_test() as pilot:
+                app.push_screen(
+                    FormScreen(
+                        "Profile",
+                        [("name", "Name", "Open", False), ("path", "Path", "model.gguf", False)],
+                    ),
+                    saved.append,
+                )
+                await pilot.pause()
+                await pilot.press("enter")
+                self.assertEqual(app.screen.focused.id, "form-path")
+                await pilot.press("ctrl+s")
+                await pilot.pause()
+            self.assertEqual(saved, [{"name": "Open", "path": "model.gguf"}])
 
     async def test_single_stream_has_no_side_panes_or_persistent_buttons(self):
         with TemporaryDirectory() as directory:

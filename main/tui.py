@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import random
 import re
 import threading
 import time
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.events import Key
 from textual.screen import ModalScreen
@@ -35,9 +37,23 @@ if TYPE_CHECKING:
 
 ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
+ACTIVITY_LABELS = (
+    "Thinking", "Computing", "Reviewing", "Spinning", "Pontificating",
+    "Mapping", "Inspecting", "Tracing", "Comparing", "Weighing options",
+    "Following clues", "Checking details", "Connecting dots", "Indexing context",
+    "Reading signals", "Testing assumptions", "Untangling threads",
+    "Sharpening plan", "Scanning workspace", "Gathering evidence",
+    "Calibrating tools", "Parsing intent", "Stacking blocks", "Finding edges",
+    "Cross-checking", "Working through it", "Pondering", "Drafting approach",
+    "Resolving paths", "Aligning context", "Keeping watch", "Simmering ideas",
+    "Exploring routes", "Chasing details", "Making sense", "Building context",
+    "Sorting evidence", "Checking constraints", "Charting next move", "Deliberating",
+)
+ACTIVITY_GRADIENT = ("#4f8f8c", "#62a7a3", "#78bfba", "#91d1cb", "#78bfba", "#62a7a3")
+
 
 class PermissionScreen(ModalScreen[PermissionDecision]):
-    BINDINGS = [("escape", "deny", "Deny")]
+    BINDINGS = [Binding("escape", "deny", "Deny", priority=True)]
 
     def __init__(self, request: PermissionRequest) -> None:
         super().__init__()
@@ -109,7 +125,7 @@ class TextualPermissionBroker:
 
 
 class TextPromptScreen(ModalScreen[str | None]):
-    BINDINGS = [("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", priority=True)]
     def __init__(
         self,
         title: str,
@@ -145,7 +161,7 @@ class TextPromptScreen(ModalScreen[str | None]):
 
 
 class ChoiceScreen(ModalScreen[str | None]):
-    BINDINGS = [("escape", "cancel", "Cancel")]
+    BINDINGS = [Binding("escape", "cancel", "Cancel", priority=True)]
     def __init__(self, title: str, choices: list[tuple[str, str]]) -> None:
         super().__init__()
         self.dialog_title = title
@@ -168,7 +184,10 @@ class ChoiceScreen(ModalScreen[str | None]):
 
 
 class ConfirmScreen(ModalScreen[bool]):
-    BINDINGS = [("escape", "cancel", "Cancel")]
+    BINDINGS = [
+        Binding("escape,n", "cancel", "Cancel", priority=True),
+        Binding("y", "confirm", "Confirm", priority=True),
+    ]
     def __init__(self, title: str, message: str) -> None:
         super().__init__()
         self.dialog_title = title
@@ -195,13 +214,18 @@ class ConfirmScreen(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
 
 class FormScreen(ModalScreen[dict[str, str] | None]):
     """Small reusable Textual form; validation remains in domain registries."""
 
     BINDINGS = [
-        ("ctrl+enter", "save", "Save"),
-        ("escape", "cancel", "Cancel"),
+        Binding("ctrl+s", "save", "Save", priority=True),
+        Binding("ctrl+enter", "save", "Save", priority=True),
+        Binding("ctrl+j", "save", "Save", show=False, priority=True),
+        Binding("escape", "cancel", "Cancel", priority=True),
     ]
 
     def __init__(
@@ -218,8 +242,8 @@ class FormScreen(ModalScreen[dict[str, str] | None]):
             yield Label(self.dialog_title, classes="dialog-title")
             for name, label, default, password in self.fields:
                 yield Label(label, classes="form-label")
-                yield Input(value=default, password=password, id=f"form-{name}")
-            yield Static("Ctrl+Enter save · Esc cancel", classes="dialog-help")
+                yield FormInput(value=default, password=password, id=f"form-{name}")
+            yield Static("Ctrl+S save · Enter next/save · Esc cancel", classes="dialog-help")
 
     def on_mount(self) -> None:
         self.query_one(Input).focus()
@@ -232,8 +256,37 @@ class FormScreen(ModalScreen[dict[str, str] | None]):
             }
         )
 
+    def advance_or_save(self, source: Input) -> None:
+        """Make model/API forms reliable across terminal key encodings."""
+        fields = list(self.query(FormInput))
+        try:
+            index = fields.index(source)
+        except ValueError:
+            self.action_save()
+            return
+        if index + 1 < len(fields):
+            fields[index + 1].focus()
+        else:
+            self.action_save()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.advance_or_save(event.input)
+
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class FormInput(Input):
+    """Single-line form input with terminal-safe save shortcuts."""
+
+    def on_key(self, event: Key) -> None:
+        if event.key in {"ctrl+enter", "ctrl+j", "ctrl+s"}:
+            event.prevent_default()
+            event.stop()
+            screen = self.screen
+            if isinstance(screen, FormScreen):
+                screen.action_save()
 
 
 class PromptTextArea(TextArea):
@@ -329,7 +382,7 @@ class OpenCLITui(App[None]):
     .dialog-help { height: 1; color: #667572; margin-top: 1; }
     """
     BINDINGS = [
-        ("escape", "stop", "Stop"),
+        Binding("escape", "stop", "Stop", priority=True),
         ("ctrl+g", "follow_latest", "Latest"),
         ("ctrl+q", "quit", "Quit"),
     ]
@@ -357,6 +410,9 @@ class OpenCLITui(App[None]):
         self._thinking_body: Static | None = None
         self._thinking_text = ""
         self._activity_message = "Ready"
+        self._activity_dynamic = False
+        self._activity_label_index = 0
+        self._activity_gradient_phase = 0
         self._busy_started = 0.0
         self._layout_width = 120
         self._command_matches = ()
@@ -539,9 +595,20 @@ class OpenCLITui(App[None]):
         self.query_one("#timeline", VerticalScroll).scroll_end(animate=False)
 
     def action_stop(self) -> None:
+        active_screen = self.screen
+        if isinstance(active_screen, PermissionScreen):
+            active_screen.action_deny()
+            return
+        if isinstance(active_screen, (TextPromptScreen, ChoiceScreen, ConfirmScreen, FormScreen)):
+            active_screen.action_cancel()
+            return
         if self._busy:
             self.cli._request_generation_stop()
-            self.query_one("#activity", Static).update("Stopping generation…")
+            self._activity_dynamic = False
+            self._activity_message = "Cancelling model and closing stream"
+            self.query_one("#activity", Static).update(
+                "Cancelling model and closing stream…"
+            )
 
     def action_models(self) -> None:
         choices: list[tuple[str, str]] = [
@@ -614,6 +681,8 @@ class OpenCLITui(App[None]):
                     ("output", "Max output tokens", "8192", False),
                     ("temperature", "Temperature", "0.7", False),
                     ("thinking", "Thinking support: yes/no", "no", False),
+                    ("reasoning_control", "Native reasoning control: none/chat_template_kwargs", "none", False),
+                    ("reasoning_default", "Reasoning default: off/low/medium/high", "off", False),
                     ("vision", "Vision support: yes/no", "no", False),
                 ],
             ),
@@ -637,6 +706,8 @@ class OpenCLITui(App[None]):
                 max_tokens=values["output"],
                 temperature=values["temperature"],
                 has_thinking=values["thinking"].casefold() in {"yes", "y", "true", "1"},
+                reasoning_control=values["reasoning_control"],
+                reasoning_default=values["reasoning_default"],
                 supports_vision=values["vision"].casefold() in {"yes", "y", "true", "1"},
                 reserved_keys=set(self.cli.MODELS) | set(self.cli.BUILTIN_MODELS),
             )
@@ -942,13 +1013,8 @@ class OpenCLITui(App[None]):
     @work(thread=True, exclusive=True)
     def _run_message(self, message: str) -> None:
         query, think_mode = self._parse_think_command(message)
-        activity = (
-            "Thinking · extended reasoning enabled · Escape stops"
-            if think_mode
-            else "Working · waiting for model · Escape stops"
-        )
-        self.call_from_thread(self._set_busy, True, activity)
         if query.startswith(("/", "!")):
+            self.call_from_thread(self._set_busy, True, "Running command · Escape stops")
             output = io.StringIO()
             try:
                 with redirect_stdout(output):
@@ -962,6 +1028,7 @@ class OpenCLITui(App[None]):
                 self.call_from_thread(self._mount_message, rendered, "event-card")
             self.call_from_thread(self._sync_session_plan)
         else:
+            self.call_from_thread(self._start_generation_activity)
             self.call_from_thread(self._begin_assistant)
             pending_tokens = ""
             last_render = time.monotonic()
@@ -1020,6 +1087,9 @@ class OpenCLITui(App[None]):
             self._follow_output = False
         self._events.append(event)
         if event.type == "token":
+            if self._activity_dynamic:
+                self._activity_dynamic = False
+                self._activity_message = "Responding · Escape stops"
             remaining = self.MAX_RENDERED_RESPONSE_CHARS - len(self._assistant_text)
             if remaining <= 0:
                 if not self._response_render_truncated:
@@ -1037,6 +1107,7 @@ class OpenCLITui(App[None]):
             if self._assistant:
                 self._assistant.update(self._assistant_segment_text)
         elif event.type == "status":
+            self._set_activity_override(event.content)
             self._assistant = None
             self._mount_message(f"Status · {event.content}", "event-card status-card")
         elif event.type == "thinking":
@@ -1064,6 +1135,7 @@ class OpenCLITui(App[None]):
             steps = int(details.get("steps", 0))
             maximum = int(details.get("max_steps", 0))
             label = f"ReAct · {phase} · {steps}/{maximum}"
+            self._set_activity_override(label)
             if self._react_card is None:
                 self._react_card = self._mount_message(
                     label, "event-card react-card"
@@ -1072,12 +1144,14 @@ class OpenCLITui(App[None]):
                 self._react_card.update(label)
             self._refresh_state()
         elif event.type == "tool":
+            self._set_activity_override(f"Using tool · {event.name}")
             self._assistant = None
             details = json.dumps(dict(event.arguments), indent=2, default=str)
             self._mount_collapsible(
                 f"Tool · {event.name}", details, "event-card tool-card"
             )
         elif event.type == "tool_result":
+            self._set_activity_override(f"Tool complete · {event.name}")
             self._assistant = None
             text = f"Result · {event.name}: {event.summary or 'complete'}"
             self._mount_message(text, "event-card result-card")
@@ -1099,6 +1173,7 @@ class OpenCLITui(App[None]):
             self._assistant = None
             self._sync_session_plan()
         elif event.type == "error":
+            self._set_activity_override("Generation failed")
             self._assistant = None
             self._mount_message(f"Error · {event.content}", "event-card error-card")
         elif event.type == "done" and not self._assistant_text and event.content:
@@ -1167,6 +1242,7 @@ class OpenCLITui(App[None]):
 
     def _set_busy(self, busy: bool, message: str | None = None) -> None:
         self._busy = busy
+        self._activity_dynamic = False
         self._activity_message = message or (
             "Working · Escape stops" if busy else "Ready"
         )
@@ -1176,13 +1252,50 @@ class OpenCLITui(App[None]):
         activity.set_class(not busy, "ready")
         activity.update(self._activity_message)
 
+    def _start_generation_activity(self) -> None:
+        self._busy = True
+        self._activity_dynamic = True
+        # Keep one label for the entire prompt and avoid repeating it next turn.
+        candidate = random.randrange(len(ACTIVITY_LABELS) - 1)
+        if candidate >= self._activity_label_index:
+            candidate += 1
+        self._activity_label_index = candidate
+        self._activity_gradient_phase = random.randrange(len(ACTIVITY_GRADIENT))
+        self._busy_started = time.monotonic()
+        activity = self.query_one("#activity", Static)
+        activity.set_class(True, "busy")
+        activity.set_class(False, "ready")
+        self._render_activity(activity)
+
+    def _set_activity_override(self, message: str) -> None:
+        if not self._busy:
+            return
+        self._activity_dynamic = False
+        self._activity_message = f"{message} · Escape stops"
+
+    def _render_activity(self, activity: Static) -> None:
+        elapsed = max(0.0, time.monotonic() - self._busy_started)
+        if not self._activity_dynamic:
+            activity.update(f"{self._activity_message} · {elapsed:0.1f}s")
+            return
+        label = ACTIVITY_LABELS[self._activity_label_index]
+        text = Text()
+        for index, character in enumerate(f"{label}…"):
+            color = ACTIVITY_GRADIENT[
+                (index + self._activity_gradient_phase) % len(ACTIVITY_GRADIENT)
+            ]
+            text.append(character, style=f"bold {color}")
+        text.append(f" · {elapsed:0.1f}s · Escape stops", style="#657371")
+        activity.update(text)
+
     def _refresh_activity_clock(self) -> None:
         if not self._busy:
             return
-        elapsed = max(0.0, time.monotonic() - self._busy_started)
-        self.query_one("#activity", Static).update(
-            f"{self._activity_message} · {elapsed:0.1f}s"
-        )
+        if self._activity_dynamic:
+            self._activity_gradient_phase = (
+                self._activity_gradient_phase + 1
+            ) % len(ACTIVITY_GRADIENT)
+        self._render_activity(self.query_one("#activity", Static))
 
     def _refresh_state(self) -> None:
         snapshot = self.cli._context_snapshot()

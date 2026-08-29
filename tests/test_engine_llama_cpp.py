@@ -1,4 +1,5 @@
 import json
+import threading
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, mock_open, patch
@@ -29,6 +30,39 @@ class NeverInterrupted:
 
 
 class LlamaCppStreamTests(TestCase):
+    def test_stop_generation_closes_local_stream_and_cancels_api(self):
+        engine = object.__new__(OpenCLIEngine)
+        engine.interrupt_handler = Mock()
+        engine.api_client = Mock()
+        engine._response_lock = threading.Lock()
+        engine._active_generation_response = Mock()
+
+        engine.stop_generation()
+
+        engine.interrupt_handler.interrupt.assert_called_once_with()
+        engine.api_client.cancel.assert_called_once_with()
+        engine._active_generation_response.close.assert_called_once_with()
+
+    @patch("main.engine.urlopen")
+    def test_native_reasoning_uses_llama_chat_template_kwargs(self, mocked_urlopen):
+        mocked_urlopen.return_value = FakeResponse([])
+        engine = object.__new__(OpenCLIEngine)
+        engine.interrupt_handler = NeverInterrupted()
+        engine._current_response = ""
+        engine.reasoning_control = "chat_template_kwargs"
+        engine.reasoning_effort = "medium"
+
+        list(engine._generate_llama_cpp_stream(
+            InputPayload(prompt="test", enhanced_prompt="test"),
+            {"path": "test/model"},
+            100,
+        ))
+
+        body = json.loads(mocked_urlopen.call_args.args[0].data.decode("utf-8"))
+        self.assertEqual(
+            body["chat_template_kwargs"], {"reasoning_effort": "medium"}
+        )
+
     @patch.dict(
         "main.engine.os.environ",
         {"OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT": "1"},
