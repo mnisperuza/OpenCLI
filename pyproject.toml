@@ -5,9 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "opencli"
 dynamic = ["version"]
-description = "OpenCLI — local AI assistant"
+description = "OpenCLI — private local and API AI agent for terminal workflows"
 readme = "README.md"
-license = {text = "Apache 2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     {name = "Matias Nisperuza", email = "mnisperuza1102@gmail.com"}
 ]
@@ -27,23 +28,23 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["ai", "assistant", "llm", "local", "cli", "qwen"]
+keywords = ["ai", "agent", "assistant", "llm", "local", "cli", "developer-tools"]
 
 # Core dependencies
 dependencies = [
     "ddgs>=9.14,<10",
     "pydantic-ai-slim>=1.107,<2",
-    "torch>=2.4.0",              # Actualizado para mejor soporte de bfloat16 y kernels de atención en 2026
-    "transformers>=5.2.0",       # REQUISITO CRÍTICO: Necesario para la arquitectura híbrida de Qwen 3.5
-    "accelerate>=0.34.0",        # Actualizado para la distribución automática de capas GQA
-    "huggingface-hub>=0.24.0",   # Actualizado para manejar los nuevos formatos de checkpoints
-    "hf_xet>=1.5.1",             # Sincronizado con lo que instaló tu sistema
+    "torch>=2.4.0",
+    "transformers>=5.2.0",
+    "accelerate>=0.34.0",
+    "huggingface-hub>=0.24.0",
+    "hf_xet>=1.5.1",
     "safetensors>=0.4.3",
     "sentencepiece>=0.2.0",
-    "einops>=0.8.0",             # Recomendado para las operaciones de tensores en la atención lineal de Qwen 3.5
-    "numpy>=1.26.0,<3.0.0",      # Ampliado el rango para evitar conflictos con librerías modernas
-    "bitsandbytes>=0.45.0",
-    "hqq>=0.2.8.post1",          # INT8 HQQ backend for Q8 KV-cache quantization
+    "einops>=0.8.0",
+    "numpy>=1.26.0,<3.0.0",
+    "bitsandbytes>=0.45.0; platform_system != 'Darwin'",
+    "hqq>=0.2.8.post1",
     "rich>=14.0.0",
     "pillow>=11.0.0,<13",
     "prompt_toolkit>=3.0.43",
@@ -54,10 +55,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-linux = ["bitsandbytes>=0.43.0"]
+linux = ["bitsandbytes>=0.43.0; platform_system == 'Linux'"]
+macos = []
 perf = ["xformers>=0.0.25"]
 sandbox = ["e2b>=2.13,<3"]
-full = ["bitsandbytes>=0.43.0", "xformers>=0.0.25", "e2b>=2.13,<3"]
+full = ["bitsandbytes>=0.43.0; platform_system != 'Darwin'", "xformers>=0.0.25; platform_system != 'Darwin'", "e2b>=2.13,<3"]
 enterprise = [
     "tenacity>=9,<10",
     "opentelemetry-sdk>=1.40,<2",
@@ -68,7 +70,7 @@ enterprise = [
 constrained = ["outlines>=1.2,<2"]
 
 [project.scripts]
-opencli = "main.cli:main"
+opencli = "opencli.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mnisperuza/OpenCLI"
@@ -78,7 +80,10 @@ Issues = "https://github.com/mnisperuza/OpenCLI/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["main*"]
+include = ["main*", "opencli*"]
+
+[tool.setuptools.package-data]
+opencli = ["py.typed"]
 
 [tool.setuptools.dynamic]
 version = {attr = "main._version.__version__"}

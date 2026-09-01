@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -50,6 +51,33 @@ class SessionMemoryStore:
     MAX_TOOL_ARCHIVES = 20
     MAX_TITLE_CHARS = 60
 
+    @staticmethod
+    def sanitize_durable_context(content: str) -> str:
+        """Remove diagnostic failures from model-readable durable context."""
+        kept: List[str] = []
+        for block in re.split(r"\n\s*\n", str(content or "")):
+            stripped = block.strip()
+            folded = stripped.casefold()
+            if not stripped:
+                continue
+            if folded.startswith((
+                "tool validation error:",
+                "traceback (most recent call last):",
+                "error log:",
+                "exception:",
+            )):
+                continue
+            if folded.startswith("tool result [") and any(marker in folded for marker in (
+                '"error":', "'error':", "traceback (most recent call last):",
+                '"status": "failed"', '"status": "fatal_error"',
+                '"status": "retryable_error"', "permission denied", "not a file:",
+            )):
+                continue
+            if folded.startswith("failures and rejected approaches"):
+                continue
+            kept.append(stripped)
+        return "\n\n".join(kept)
+
     def __init__(self, workspace: Path, root: Optional[Path] = None):
         self.workspace = workspace.resolve()
         digest = hashlib.sha256(
@@ -70,6 +98,7 @@ class SessionMemoryStore:
         return record
 
     def save(self, record: SessionRecord, transcript: str) -> None:
+        transcript = self.sanitize_durable_context(transcript)
         record.transcript = transcript
         self.directory.mkdir(parents=True, exist_ok=True)
         notes = "\n".join(f"- {note}" for note in record.notes) or "_No notes._"
@@ -145,7 +174,9 @@ class SessionMemoryStore:
         budget = max(1_000, min(max_chars or self.MAX_CONTEXT_CHARS, self.MAX_LOADED_CHARS))
         notes = self._markdown_section(content, "Notes")
         compact_history = self._markdown_section(content, "Compact History")
-        transcript = self._markdown_section(content, "Transcript")
+        transcript = self.sanitize_durable_context(
+            self._markdown_section(content, "Transcript")
+        )
         checkpoint = self._latest_checkpoint(compact_history)
         sections = []
         if notes and notes != "_No notes._":
@@ -222,14 +253,14 @@ class SessionMemoryStore:
         record.compactions.append(
             CompactionRecord(
                 created_at=datetime.now().astimezone(),
-                summary=summary.strip(),
-                source_transcript=source_transcript.strip(),
+                summary=self.sanitize_durable_context(summary),
+                source_transcript=self.sanitize_durable_context(source_transcript),
             )
         )
         self.save(record, transcript)
 
     def archive_tool_results(self, record: SessionRecord, content: str) -> None:
-        cleaned = content.strip()
+        cleaned = self.sanitize_durable_context(content)
         if cleaned:
             if len(cleaned) > self.MAX_TOOL_ARCHIVE_CHARS:
                 removed = len(cleaned) - self.MAX_TOOL_ARCHIVE_CHARS

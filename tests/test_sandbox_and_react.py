@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -177,6 +178,7 @@ class ReactLoopTests(TestCase):
                 config=RuntimeConfig(
                     persist_state=False,
                     react_decision_retries=2,
+                    react_strict_control=True,
                 ),
             )
 
@@ -398,6 +400,70 @@ class ReactLoopTests(TestCase):
         with self.assertRaisesRegex(ValueError, "already active"):
             controller.start_task("Reset budget")
 
+    def test_normal_react_warns_before_repeated_action_hard_stop(self):
+        controller = ReactLoopController(ReactLoopPolicy(
+            strict_control=False,
+            max_steps=10,
+            max_repeated_action=5,
+            warn_repeated_action=2,
+            hard_stagnation_limit=10,
+        ))
+        controller.begin_turn("inspect")
+        for _index in range(2):
+            controller.before_tool("read_text_file", {"path": "same.py"})
+            controller.after_tool({"summary": "same content"})
+
+        status = controller.status()
+        self.assertEqual(status["phase"], "act")
+        self.assertIn("warning", status["guardrail_warning"].casefold())
+
+        for _index in range(3):
+            controller.before_tool("read_text_file", {"path": "same.py"})
+            controller.after_tool({"summary": "same content"})
+        with self.assertRaisesRegex(ReactLoopLimitError, "repeated action"):
+            controller.before_tool("read_text_file", {"path": "same.py"})
+
+    def test_normal_react_closes_tools_at_budget_for_graceful_answer(self):
+        controller = ReactLoopController(ReactLoopPolicy(
+            strict_control=False, max_steps=1, max_repeated_action=5
+        ))
+        controller.begin_turn("inspect")
+        controller.before_tool("list_files", {"path": "."})
+        controller.after_tool({"summary": "found files"})
+
+        self.assertTrue(controller.status()["wrap_up_required"])
+        self.assertEqual(controller.status()["phase"], "act")
+
+    def test_interactive_guardrails_warn_without_blocking_repeated_actions(self):
+        controller = ReactLoopController(ReactLoopPolicy(
+            strict_control=False,
+            hard_stops=False,
+            max_steps=10,
+            max_repeated_action=2,
+            warn_repeated_action=2,
+            hard_stagnation_limit=2,
+        ))
+        controller.begin_turn("explore")
+        for _index in range(4):
+            controller.before_tool("read_text_file", {"path": "same.py"})
+            controller.after_tool({"summary": "same content"})
+
+        self.assertEqual(controller.status()["steps"], 4)
+        self.assertFalse(controller.status()["halted_reason"])
+        self.assertIn("warning", controller.status()["guardrail_warning"].casefold())
+
+    def test_react_off_keeps_quiet_tool_budget_guard(self):
+        controller = ReactLoopController(ReactLoopPolicy(
+            strict_control=False, hard_stops=False, max_steps=1
+        ))
+        controller.enabled = False
+        controller.begin_turn("ordinary tool use")
+
+        self.assertEqual(controller.before_tool("list_files", {"path": "."}), 1)
+        controller.after_tool({"summary": "found files"})
+        with self.assertRaisesRegex(ReactLoopLimitError, "tool steps"):
+            controller.before_tool("read_text_file", {"path": "a.py"})
+
     def test_plan_completion_requires_tool_evidence(self):
         class Engine:
             current_mode = "test"
@@ -479,6 +545,22 @@ class ReactLoopTests(TestCase):
         self.assertNotIn('"name": "write_text_file"', runtime._tool_prompt_text)
         self.assertIn('"name": "write_text_file"', runtime._mutation_tool_prompt_text)
 
+    def test_task_plan_context_cannot_turn_chat_into_file_mutation(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(), config=RuntimeConfig(persist_state=False)
+        )
+        prompt = (
+            "USER REQUEST:\nAre you okay?"
+            "\n\nUSER-MAINTAINED TASK PLAN:\n"
+            "- Create a Python script and run tests"
+        )
+
+        self.assertFalse(runtime._is_workspace_mutation_request(prompt))
+
     def test_runtime_control_tools_are_visible_and_manual_start_remains_capped(self):
         class Engine:
             current_mode = "test"
@@ -488,7 +570,10 @@ class ReactLoopTests(TestCase):
             root = Path(directory)
             runtime = PydanticAgentRuntime(
                 Engine(), workspace=root,
-                config=RuntimeConfig(persist_state=False, react_max_steps=4),
+                config=RuntimeConfig(
+                    persist_state=False, react_max_steps=4,
+                    react_strict_control=True,
+                ),
             )
             result = runtime.start_react_task(
                 "Inspect module layout", paths=["main"], max_steps=99
@@ -501,6 +586,39 @@ class ReactLoopTests(TestCase):
         self.assertIn("critique_and_plan", runtime.available_tools)
         self.assertNotIn("start_react_task", runtime.available_tools)
         self.assertIn('"name": "react_dispatch"', runtime._tool_prompt_text)
+
+    def test_default_runtime_uses_normal_host_managed_react(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+            def __init__(self):
+                self.prompts = []
+
+            def generate_runtime_stream(self, prompt):
+                self.prompts.append(prompt)
+                if len(self.prompts) == 1:
+                    content = (
+                        '<tool_call>{"name":"write_text_file","arguments":'
+                        '{"path":"normal.txt","content":"done"}}</tool_call>'
+                    )
+                else:
+                    content = "Created normal.txt."
+                yield {"type": "token", "content": content}
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = Engine()
+            runtime = PydanticAgentRuntime(
+                engine, workspace=root, config=RuntimeConfig(persist_state=False)
+            )
+            events = list(runtime.generate_stream("Create normal.txt"))
+
+            self.assertEqual((root / "normal.txt").read_text(encoding="utf-8"), "done")
+        self.assertEqual(len(engine.prompts), 2)
+        self.assertNotIn("react_dispatch", runtime.available_tools)
+        self.assertEqual(runtime.react.status()["phase"], "finish")
+        self.assertTrue(any(event.get("type") == "tool" for event in events))
 
     def test_remote_adapter_keeps_one_tool_action_per_model_step(self):
         class Client:
@@ -535,6 +653,162 @@ class ReactLoopTests(TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].name, "first")
 
+    def test_remote_adapter_allows_three_tool_actions_by_default(self):
+        class Client:
+            def stream_chat(self, _messages, _tools):
+                yield {
+                    "type": "tool_calls",
+                    "calls": [
+                        {
+                            "id": str(index), "name": "read",
+                            "arguments": json.dumps({"path": str(index)}),
+                        }
+                        for index in range(4)
+                    ],
+                }
+
+        class Engine:
+            backend = "remote_api"
+            api_client = Client()
+            current_mode = "api"
+            MODELS = {"api": {"path": "provider/model"}}
+
+        info = SimpleNamespace(function_tools=[
+            SimpleNamespace(name="read", description="", parameters_json_schema={})
+        ])
+        adapter = LocalModelAdapter(Engine())
+
+        async def collect():
+            return [event async for event in adapter._stream_remote([], info)]
+
+        events = asyncio.run(collect())
+        calls = next(event for event in events if isinstance(event, dict))
+        self.assertEqual(len(calls), 3)
+
+    def test_remote_adapter_does_not_finalize_text_before_later_tool_calls(self):
+        captured = []
+
+        class Client:
+            def stream_chat(self, _messages, _tools, _tool_choice="auto"):
+                yield {"type": "token", "content": "I will inspect it first."}
+                yield {
+                    "type": "tool_calls",
+                    "calls": [{
+                        "id": "read-1",
+                        "name": "read_text_file",
+                        "arguments": '{"path":"IMPROVEMENTS.md"}',
+                    }],
+                }
+
+        class Engine:
+            backend = "remote_api"
+            api_client = Client()
+            current_mode = "api"
+            MODELS = {"api": {"path": "provider/model"}}
+
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="", parameters_json_schema={}
+        )])
+        adapter = LocalModelAdapter(Engine(), event_sink=captured.append)
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertFalse(any(isinstance(event, str) for event in events))
+        calls = next(event for event in events if isinstance(event, dict))
+        self.assertEqual(calls[0].tool_call_id, "read-1")
+        turn = next(event for event in captured if event["type"] == "model_turn")
+        self.assertEqual(turn["disposition"], "tool_calls")
+        self.assertEqual(turn["content"], "I will inspect it first.")
+
+    def test_adapter_reserves_last_model_request_for_final_answer(self):
+        class Client:
+            def __init__(self):
+                self.choices = []
+
+            def stream_chat(self, _messages, _tools, tool_choice="auto"):
+                self.choices.append(tool_choice)
+                yield {"type": "token", "content": "done"}
+
+        class Engine:
+            backend = "remote_api"
+            api_client = Client()
+            current_mode = "api"
+            MODELS = {"api": {"path": "provider/model"}}
+
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="", parameters_json_schema={}
+        )])
+        adapter = LocalModelAdapter(
+            Engine(), max_model_requests=2, final_response_request_reserve=1
+        )
+
+        async def collect():
+            for _index in range(2):
+                _ = [event async for event in adapter.stream([], info)]
+
+        asyncio.run(collect())
+        self.assertEqual(adapter.engine.api_client.choices, ["auto", "none"])
+
+    def test_local_adapter_buffers_long_prose_until_tool_decision(self):
+        captured = []
+
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+            def generate_runtime_stream(self, _prompt):
+                yield {"type": "token", "content": "thinking " * 100}
+                yield {
+                    "type": "token",
+                    "content": (
+                        '<tool_call>{"name":"read_text_file","arguments":'
+                        '{"path":"IMPROVEMENTS.md"}}</tool_call>'
+                    ),
+                }
+
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="", parameters_json_schema={}
+        )])
+        adapter = LocalModelAdapter(Engine(), event_sink=captured.append)
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], dict)
+        self.assertEqual(events[0][0].name, "read_text_file")
+        self.assertFalse(any(isinstance(event, str) for event in events))
+        self.assertEqual(captured[0]["type"], "model_turn")
+        self.assertEqual(captured[0]["disposition"], "tool_calls")
+
+    def test_local_adapter_returns_structured_error_for_malformed_tool_call(self):
+        captured = []
+
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+            def generate_runtime_stream(self, _prompt):
+                yield {
+                    "type": "token",
+                    "content": '<tool_call>{"name":"read_text_file","arguments":',
+                }
+
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="", parameters_json_schema={}
+        )])
+        adapter = LocalModelAdapter(Engine(), event_sink=captured.append)
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertEqual(events, ["Tool call rejected: invalid JSON or unsupported tool."])
+        self.assertEqual(captured[0]["disposition"], "invalid")
+
 
 class SandboxCliTests(TestCase):
     @patch("main.sandbox.DockerSandbox.is_available", return_value=True)
@@ -549,7 +823,7 @@ class SandboxCliTests(TestCase):
         self.assertEqual(cli.react_status()["mode"], "ordinary_agent")
         self.assertEqual(cli.react_status()["phase"], "off")
 
-    def test_cli_react_on_reports_strict_every_turn_mode(self):
+    def test_cli_react_on_reports_host_managed_mode(self):
         cli = OpenCLI(dry_run=True)
         cli.react_enabled = False
         with patch("builtins.print"):
@@ -557,5 +831,14 @@ class SandboxCliTests(TestCase):
 
         status = cli.react_status()
         self.assertTrue(status["enabled"])
-        self.assertEqual(status["mode"], "strict_every_turn")
+        self.assertEqual(status["mode"], "host_managed")
+        self.assertFalse(status["single_action_per_model_step"])
         self.assertEqual(status["phase"], "ready")
+
+    def test_cli_can_select_staged_harness_mode(self):
+        cli = OpenCLI(dry_run=True)
+        cli.agent_runtime = object()
+        with patch("builtins.print"):
+            self.assertTrue(cli.handle_command("/harness mode legacy"))
+        self.assertEqual(cli.harness_mode, "legacy")
+        self.assertIsNone(cli.agent_runtime)

@@ -50,6 +50,8 @@ AutoProcessor = None
 AutoModelForImageTextToText = None
 DynamicCache = None
 QuantizedCache = None
+StoppingCriteria = None
+StoppingCriteriaList = None
 HQQQuantizedLayer = None
 CacheLayerMixin = None
 
@@ -73,6 +75,8 @@ try:
             BitsAndBytesConfig,
             DynamicCache,
             QuantizedCache,
+            StoppingCriteria,
+            StoppingCriteriaList,
         )
         from transformers.cache_utils import HQQQuantizedLayer, CacheLayerMixin
         from transformers import TextIteratorStreamer
@@ -126,6 +130,16 @@ _interrupt_handler = InterruptHandler()
 
 def get_interrupt_handler() -> InterruptHandler:
     return _interrupt_handler
+
+
+class InterruptStoppingCriteria:
+    """Make Transformers stop computing, not merely stop displaying tokens."""
+
+    def __init__(self, handler: InterruptHandler):
+        self.handler = handler
+
+    def __call__(self, _input_ids, _scores, **_kwargs) -> bool:
+        return self.handler.is_interrupted()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -305,8 +319,8 @@ class FileHandler:
             return False, None, f"Error loading image: {error}"
 
     def get_clipboard_image(self) -> Optional[ImageAttachment]:
-        """Read an image directly from the Windows clipboard when available."""
-        if not IS_WINDOWS or not PIL_AVAILABLE or ImageGrab is None:
+        """Read an image directly from the system clipboard when available."""
+        if not (IS_WINDOWS or IS_MACOS) or not PIL_AVAILABLE or ImageGrab is None:
             return None
         if not self._allowed(
             "read_clipboard", "clipboard", "Attach clipboard image to prompt"
@@ -646,6 +660,8 @@ class OpenCLIEngine:
         self._llama_process = None
         self._llama_log = None
         self._llama_log_path = None
+        self._llama_starting = False
+        self._model_loading = False
         self._response_lock = threading.Lock()
         self._active_generation_response = None
         atexit.register(self.shutdown)
@@ -744,19 +760,37 @@ class OpenCLIEngine:
 
     @staticmethod
     def _find_llama_cpp_executable() -> Optional[str]:
-        """Find llama.cpp from PATH or Windows WinGet package storage."""
+        """Find llama.cpp from PATH and common supported-platform locations."""
         executable = shutil.which("llama-server") or shutil.which("llama")
         if executable:
             return executable
-        if os.name != "nt":
-            return None
 
-        package_root = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
-        for name in ("llama-server.exe", "llama.exe"):
-            matches = sorted(package_root.glob(f"ggml.llamacpp_*/{name}"))
-            if matches:
-                return str(matches[-1])
+        if os.name == "nt":
+            package_root = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+            for name in ("llama-server.exe", "llama.exe"):
+                matches = sorted(package_root.glob(f"ggml.llamacpp_*/{name}"))
+                if matches:
+                    return str(matches[-1])
+        elif platform.system() == "Darwin":
+            for prefix in (Path("/opt/homebrew"), Path("/usr/local")):
+                for name in ("llama-server", "llama"):
+                    candidate = prefix / "opt" / "llama.cpp" / "bin" / name
+                    if candidate.is_file():
+                        return str(candidate)
+                    candidate = prefix / "bin" / name
+                    if candidate.is_file():
+                        return str(candidate)
         return None
+
+    @staticmethod
+    def _llama_cpp_install_hint() -> str:
+        """Return the native installation command for the current platform."""
+        system = platform.system()
+        if system == "Windows":
+            return "winget install llama.cpp"
+        if system == "Darwin":
+            return "brew install llama.cpp"
+        return "install llama.cpp and ensure llama-server is on PATH"
 
     @staticmethod
     def _gguf_quant_tag(quant: str) -> str:
@@ -778,6 +812,17 @@ class OpenCLIEngine:
         except ValueError:
             return 900.0
 
+    @staticmethod
+    def _llama_cpp_download_failure_limit() -> int:
+        """Return how many explicit download failures to tolerate at startup."""
+        raw_value = os.environ.get(
+            "OPENCLI_LLAMA_CPP_DOWNLOAD_FAILURE_LIMIT", "1"
+        )
+        try:
+            return max(1, int(raw_value))
+        except ValueError:
+            return 1
+
     def _start_llama_cpp_server(
         self, model_info: Dict[str, Any], quant: str
     ) -> Tuple[bool, str]:
@@ -789,7 +834,10 @@ class OpenCLIEngine:
 
         executable = self._find_llama_cpp_executable()
         if not executable:
-            return False, "llama.cpp is required for GGUF models. Install it with: winget install llama.cpp"
+            return False, (
+                "llama.cpp is required for GGUF models. Install it with: "
+                f"{self._llama_cpp_install_hint()}"
+            )
 
         port = parsed.port or 8080
         if model_info.get("source_type") == "local":
@@ -822,7 +870,7 @@ class OpenCLIEngine:
             startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startup_info.wShowWindow = subprocess.SW_HIDE
         try:
-            self._llama_log_path = Path(tempfile.gettempdir()) / "bert-llama-server.log"
+            self._llama_log_path = Path(tempfile.gettempdir()) / "opencli-llama-server.log"
             self._llama_log = open(self._llama_log_path, "w", encoding="utf-8")
             # Keep the server outside this console's Ctrl+C group.  Ctrl+C is a
             # generation interrupt in OpenCLI; it must not kill the loaded model.
@@ -837,6 +885,7 @@ class OpenCLIEngine:
                 stderr=subprocess.STDOUT,
                 startupinfo=startup_info,
                 creationflags=creationflags,
+                start_new_session=os.name != "nt",
             )
         except OSError as error:
             if self._llama_log is not None:
@@ -844,25 +893,46 @@ class OpenCLIEngine:
                 self._llama_log = None
             return False, f"Could not start llama.cpp: {error}"
 
-        timeout_seconds = self._llama_cpp_startup_timeout()
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            if self._llama_cpp_is_ready(base_url):
-                return True, ""
-            if self._llama_process.poll() is not None:
-                self._llama_process = None
-                detail = self._llama_log_tail()
-                self.shutdown()
-                return False, f"llama.cpp stopped during startup. {detail}"
-            if time.monotonic() >= deadline:
-                detail = self._llama_log_tail()
-                self.shutdown()
-                message = (
-                    "llama.cpp did not become ready within "
-                    f"{timeout_seconds:g} seconds."
-                )
-                return False, f"{message} {detail}".rstrip()
-            time.sleep(0.5)
+        process = self._llama_process
+        self._llama_starting = True
+        try:
+            timeout_seconds = self._llama_cpp_startup_timeout()
+            deadline = time.monotonic() + timeout_seconds
+            while True:
+                handler = getattr(self, "interrupt_handler", None)
+                if handler is not None and handler.is_interrupted():
+                    self.shutdown()
+                    return False, "llama.cpp startup cancelled."
+                if self._llama_cpp_is_ready(base_url):
+                    return True, ""
+                if process.poll() is not None:
+                    self._llama_process = None
+                    detail = self._llama_log_tail()
+                    self.shutdown()
+                    return False, f"llama.cpp stopped during startup. {detail}"
+                if (
+                    model_info.get("source_type") != "local"
+                    and self._llama_log_download_failures()
+                    >= self._llama_cpp_download_failure_limit()
+                ):
+                    detail = self._llama_log_tail()
+                    self.shutdown()
+                    return False, (
+                        "llama.cpp could not download the model from Hugging Face. "
+                        "Check your connection or download the GGUF first, then retry. "
+                        f"{detail}"
+                    ).rstrip()
+                if time.monotonic() >= deadline:
+                    detail = self._llama_log_tail()
+                    self.shutdown()
+                    message = (
+                        "llama.cpp did not become ready within "
+                        f"{timeout_seconds:g} seconds."
+                    )
+                    return False, f"{message} {detail}".rstrip()
+                time.sleep(0.5)
+        finally:
+            self._llama_starting = False
 
 
     def _llama_log_tail(self) -> str:
@@ -875,6 +945,20 @@ class OpenCLIEngine:
             return " ".join(lines[-3:])[-800:]
         except OSError:
             return ""
+
+    def _llama_log_download_failures(self) -> int:
+        """Count explicit llama.cpp Hugging Face download failures in its log."""
+        if self._llama_log is not None:
+            self._llama_log.flush()
+        if self._llama_log_path is None or not self._llama_log_path.exists():
+            return 0
+        try:
+            content = self._llama_log_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).casefold()
+        except OSError:
+            return 0
+        return content.count("download failed:")
 
     def _load_llama_cpp_model(self, mode: str, model_info: Dict[str, Any], quant: str) -> Tuple[bool, str]:
         """Use a running llama.cpp OpenAI-compatible server for GGUF models."""
@@ -1123,7 +1207,17 @@ class OpenCLIEngine:
 
     def load_model(self, mode: str = "auto", quant: str = "int4",
                    progress_callback=None) -> Tuple[bool, str]:
-        """Load a model with progress updates"""
+        """Load a model while exposing one reliable cancellation state."""
+        self.interrupt_handler.reset()
+        self._model_loading = True
+        try:
+            return self._load_model_impl(mode, quant, progress_callback)
+        finally:
+            self._model_loading = False
+
+    def _load_model_impl(self, mode: str = "auto", quant: str = "int4",
+                         progress_callback=None) -> Tuple[bool, str]:
+        """Implement model loading after cancellation state is initialized."""
 
         # Resolve model alias.
         mode = self.MODEL_ALIASES.get(mode, mode)
@@ -1481,6 +1575,10 @@ class OpenCLIEngine:
                 "use_cache": True,
                 "past_key_values": self._new_q4_kv_cache(),
             }
+            if StoppingCriteriaList is not None:
+                gen_kwargs["stopping_criteria"] = StoppingCriteriaList(
+                    [InterruptStoppingCriteria(self.interrupt_handler)]
+                )
             if "attention_mask" in inputs:
                 gen_kwargs["attention_mask"] = inputs["attention_mask"]
 
@@ -1607,8 +1705,12 @@ class OpenCLIEngine:
         return False
 
     def stop_generation(self):
-        """Stop model work and actively close blocking HTTP streams."""
+        """Stop active generation or model loading and close blocking streams."""
         self.interrupt_handler.interrupt()
+        # During startup the process is only downloading/loading.  Escape must
+        # cancel that work rather than leave the UI waiting for its timeout.
+        if getattr(self, "_llama_starting", False):
+            self.shutdown()
         client = self.api_client
         cancel = getattr(client, "cancel", None)
         if callable(cancel):
@@ -1626,6 +1728,9 @@ class OpenCLIEngine:
 
     def is_generating(self) -> bool:
         return self._generating
+
+    def is_loading_model(self) -> bool:
+        return getattr(self, "_model_loading", False)
 
     def prepare_input_payload(self, prompt: str) -> InputPayload:
         """

@@ -74,10 +74,6 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Bert data directory
-.bert/
-BERT.md
-
 # Model cache
 *.bin
 *.safetensors

@@ -18,6 +18,7 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Key
 from textual.screen import ModalScreen
 from textual.widgets import (
@@ -84,6 +85,9 @@ class PermissionScreen(ModalScreen[PermissionDecision]):
         self.dismiss(PermissionDecision(str(event.option.id)))
 
     def action_deny(self) -> None:
+        app = self.app
+        if getattr(app, "_active_operation", None) == "generation":
+            app.cli._request_generation_stop()
         self.dismiss(PermissionDecision.DENY)
 
 
@@ -398,6 +402,7 @@ class OpenCLITui(App[None]):
         self.state_root = state_root
         self.api_start = api_start
         self._busy = False
+        self._active_operation: str | None = None
         self._assistant: Markdown | None = None
         self._assistant_text = ""
         self._assistant_segment_text = ""
@@ -602,12 +607,13 @@ class OpenCLITui(App[None]):
         if isinstance(active_screen, (TextPromptScreen, ChoiceScreen, ConfirmScreen, FormScreen)):
             active_screen.action_cancel()
             return
-        if self._busy:
+        if self._busy and self._active_operation in {"generation", "model_loading"}:
             self.cli._request_generation_stop()
             self._activity_dynamic = False
-            self._activity_message = "Cancelling model and closing stream"
+            noun = "model load" if self._active_operation == "model_loading" else "generation"
+            self._activity_message = f"Stopping {noun}"
             self.query_one("#activity", Static).update(
-                "Cancelling model and closing stream…"
+                f"Stopping {noun}…"
             )
 
     def action_models(self) -> None:
@@ -651,7 +657,7 @@ class OpenCLITui(App[None]):
                 return
             from main.api_providers import PROVIDERS
             definition = PROVIDERS[profile["provider"]]
-            api_key = self.cli._api_key or os.environ.get(definition.environment_variable, "")
+            api_key = self.cli._api_key or definition.api_key_from_environment()
             if api_key:
                 self._activate_api_profile(profile["provider"], profile["model"], api_key)
             else:
@@ -693,7 +699,9 @@ class OpenCLITui(App[None]):
     def _create_model_profile(self, values: dict[str, str] | None) -> None:
         if not values:
             return
-        self.call_from_thread(self._set_busy, True, "Saving model profile…")
+        self.call_from_thread(
+            self._set_busy, True, "Saving and loading model profile…", "model_loading"
+        )
         from main.model_registry import ModelRegistryError
 
         try:
@@ -779,9 +787,7 @@ class OpenCLITui(App[None]):
         from main.api_providers import PROVIDERS
 
         definition = PROVIDERS[provider]
-        api_key = self.cli._api_key or os.environ.get(
-            definition.environment_variable, ""
-        )
+        api_key = self.cli._api_key or definition.api_key_from_environment()
         if api_key:
             self._discover_api_models(provider, api_key)
             return
@@ -871,8 +877,10 @@ class OpenCLITui(App[None]):
                 self._mount_message, "Unknown API provider.", "event-card"
             )
             return
-        api_key = values["key"] or self._pending_api_key or os.environ.get(
-            PROVIDERS[provider].environment_variable, ""
+        api_key = (
+            values["key"]
+            or self._pending_api_key
+            or PROVIDERS[provider].api_key_from_environment()
         )
         self._pending_api_key = ""
         self._pending_api_client = None
@@ -944,7 +952,9 @@ class OpenCLITui(App[None]):
 
     @work(thread=True, exclusive=True)
     def _load_selected_model(self, key: str) -> None:
-        self.call_from_thread(self._set_busy, True, f"Loading {key}…")
+        self.call_from_thread(
+            self._set_busy, True, f"Loading {key}…", "model_loading"
+        )
         success = self.cli.load_model(key, self.cli.quant, show_picker=False, render=False)
         self.call_from_thread(self._mount_message, f"Model {'ready' if success else 'failed'}: {key}", "event-card")
         self.call_from_thread(self._refresh_state)
@@ -1013,7 +1023,7 @@ class OpenCLITui(App[None]):
     @work(thread=True, exclusive=True)
     def _run_message(self, message: str) -> None:
         query, think_mode = self._parse_think_command(message)
-        if query.startswith(("/", "!")):
+        if query.startswith(("/", "!")) and not self.cli.is_model_turn_command(query):
             self.call_from_thread(self._set_busy, True, "Running command · Escape stops")
             output = io.StringIO()
             try:
@@ -1240,8 +1250,14 @@ class OpenCLITui(App[None]):
             excess -= 1
             self._history_windowed = True
 
-    def _set_busy(self, busy: bool, message: str | None = None) -> None:
+    def _set_busy(
+        self,
+        busy: bool,
+        message: str | None = None,
+        operation: str | None = None,
+    ) -> None:
         self._busy = busy
+        self._active_operation = operation if busy else None
         self._activity_dynamic = False
         self._activity_message = message or (
             "Working · Escape stops" if busy else "Ready"
@@ -1254,6 +1270,7 @@ class OpenCLITui(App[None]):
 
     def _start_generation_activity(self) -> None:
         self._busy = True
+        self._active_operation = "generation"
         self._activity_dynamic = True
         # Keep one label for the entire prompt and avoid repeating it next turn.
         candidate = random.randrange(len(ACTIVITY_LABELS) - 1)
@@ -1289,13 +1306,19 @@ class OpenCLITui(App[None]):
         activity.update(text)
 
     def _refresh_activity_clock(self) -> None:
-        if not self._busy:
+        if not self._busy or not self.is_mounted:
             return
         if self._activity_dynamic:
             self._activity_gradient_phase = (
                 self._activity_gradient_phase + 1
             ) % len(ACTIVITY_GRADIENT)
-        self._render_activity(self.query_one("#activity", Static))
+        try:
+            activity = self.query_one("#activity", Static)
+        except NoMatches:
+            # Textual may run one final timer callback while a test or app is
+            # tearing down its screen. The status bar no longer exists then.
+            return
+        self._render_activity(activity)
 
     def _refresh_state(self) -> None:
         snapshot = self.cli._context_snapshot()

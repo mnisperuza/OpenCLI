@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Generator, List, Optional
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from .provider_reliability import ProviderCapabilities, ProviderReliabilityController
@@ -23,6 +25,34 @@ class ProviderDefinition:
     base_url: str
     key_url: str
     environment_variable: str
+    environment_variable_aliases: tuple[str, ...] = ()
+    base_url_environment_variable: str = ""
+
+    def api_key_from_environment(self) -> str:
+        """Read first configured provider key without persisting it."""
+        for name in (self.environment_variable, *self.environment_variable_aliases):
+            value = os.environ.get(name, "").strip()
+            if value:
+                return value
+        return ""
+
+    def resolved_base_url(self) -> str:
+        """Resolve optional regional endpoint and reject unsafe URLs."""
+        value = self.base_url
+        if self.base_url_environment_variable:
+            value = os.environ.get(self.base_url_environment_variable, value).strip()
+        value = value.rstrip("/")
+        parsed = urlparse(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(f"Invalid {self.name} API base URL")
+        return value
 
 
 PROVIDERS: Dict[str, ProviderDefinition] = {
@@ -47,6 +77,15 @@ PROVIDERS: Dict[str, ProviderDefinition] = {
         key_url="https://openrouter.ai/settings/keys",
         environment_variable="OPENROUTER_API_KEY",
     ),
+    "qwen": ProviderDefinition(
+        key="qwen",
+        name="Qwen Cloud (Alibaba Model Studio)",
+        base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        key_url="https://www.alibabacloud.com/help/en/model-studio/get-api-key",
+        environment_variable="DASHSCOPE_API_KEY",
+        environment_variable_aliases=("QWEN_API_KEY",),
+        base_url_environment_variable="QWEN_BASE_URL",
+    ),
 }
 
 
@@ -68,6 +107,7 @@ class OpenAICompatibleClient:
         if not self.api_key:
             raise ValueError("API key cannot be empty")
         self.model = self.normalize_model_id(model)
+        self.base_url = self.definition.resolved_base_url()
         self.timeout_seconds = timeout_seconds
         self.max_output_tokens: Optional[int] = None
         self.max_stream_chars: Optional[int] = 96_000
@@ -120,7 +160,7 @@ class OpenAICompatibleClient:
         if self.provider == "openrouter":
             headers.update(
                 {
-                    "HTTP-Referer": "https://github.com/mnisperuza/bert-cli",
+                    "HTTP-Referer": "https://github.com/mnisperuza/OpenCLI",
                     "X-OpenRouter-Title": "OpenCLI",
                 }
             )
@@ -141,7 +181,7 @@ class OpenAICompatibleClient:
 
     def list_models(self) -> List[str]:
         request = Request(
-            f"{self.definition.base_url}/models",
+            f"{self.base_url}/models",
             headers=self._headers(),
             method="GET",
         )
@@ -287,7 +327,7 @@ class OpenAICompatibleClient:
             if tool_choice is not None:
                 body["tool_choice"] = tool_choice
         request = Request(
-            f"{self.definition.base_url}/chat/completions",
+            f"{self.base_url}/chat/completions",
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers=self._headers(),
             method="POST",

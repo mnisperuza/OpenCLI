@@ -29,12 +29,36 @@ from main.tool_runtime import (
     CompletionValidator,
     DeterministicReadBatchExecutor,
     default_tool_registry,
+    default_toolset_registry,
     mutation_receipt,
 )
 from main.workspace_context import WorkspaceContext
 
 
 class HarnessContractTests(TestCase):
+    def test_toolsets_filter_capabilities_without_changing_tool_policy(self):
+        registry = default_toolset_registry()
+        self.assertIn("workspace", registry.names)
+        self.assertIn("web_search", registry.enabled_tools(("web",)))
+        self.assertNotIn("write_text_file", registry.enabled_tools(("web",)))
+
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        runtime = PydanticAgentRuntime(
+            Engine(),
+            config=RuntimeConfig(
+                persist_state=False,
+                enabled_toolsets=("workspace", "planning"),
+                react_strict_control=True,
+            ),
+        )
+        self.assertIn("list_files", runtime.available_tools)
+        self.assertIn("react_dispatch", runtime.available_tools)
+        self.assertNotIn("web_search", runtime.available_tools)
+        self.assertNotIn('"name": "web_search"', runtime._tool_prompt_text)
+
     def test_summary_prose_never_controls_tool_status(self):
         outcome = ToolOutcome.from_event(
             {"summary": "failed error denied unchanged but this is only prose"}
@@ -245,6 +269,32 @@ class RunLedgerTests(TestCase):
             self.assertTrue(ledger.delete_memory(second.memory_id))
             self.assertEqual(ledger.list_memory(namespace="project"), [])
 
+    def test_memory_search_returns_active_ranked_records(self):
+        with TemporaryDirectory() as directory:
+            ledger = RunLedger(Path(directory) / "state.sqlite3", "session")
+            relevant = ledger.put_memory(
+                MemoryRecord(
+                    namespace="project",
+                    scope="workspace",
+                    content="Use Python 3.12 for package builds.",
+                    provenance="user",
+                    trust=TrustClass.USER_CONFIRMED,
+                )
+            )
+            ledger.put_memory(
+                MemoryRecord(
+                    namespace="project",
+                    scope="workspace",
+                    content="The release checklist needs a changelog.",
+                    provenance="user",
+                    trust=TrustClass.USER_CONFIRMED,
+                )
+            )
+
+            found = ledger.search_memory("python package", scope="workspace")
+
+        self.assertEqual([record.memory_id for record in found], [relevant.memory_id])
+
     def test_writer_lease_prevents_concurrent_session_mutation(self):
         with TemporaryDirectory() as directory:
             ledger = RunLedger(Path(directory) / "state.sqlite3", "session")
@@ -307,6 +357,7 @@ class ReliabilityAndRecoveryTests(TestCase):
                 config=RuntimeConfig(
                     state_db_path=db,
                     session_id="session",
+                    react_strict_control=True,
                 ),
             )
             result = runtime.reconcile_run(state.run_id)
@@ -351,6 +402,7 @@ class ReliabilityAndRecoveryTests(TestCase):
                 config=RuntimeConfig(
                     state_db_path=db,
                     session_id="session",
+                    react_strict_control=True,
                 ),
             )
             events = list(runtime.generate_stream("Create result.txt containing done"))

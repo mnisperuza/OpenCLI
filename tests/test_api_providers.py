@@ -8,7 +8,7 @@ from urllib.error import HTTPError
 
 from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
 from main.api_profiles import ApiProfileRegistry
-from main.api_providers import OpenAICompatibleClient
+from main.api_providers import OpenAICompatibleClient, PROVIDERS
 
 
 class FakeResponse:
@@ -30,6 +30,54 @@ class FakeResponse:
 
 
 class ApiProviderClientTests(unittest.TestCase):
+    def test_qwen_cloud_uses_dashscope_openai_compatible_api(self):
+        payload = json.dumps({"data": [{"id": "qwen-plus"}]}).encode()
+        client = OpenAICompatibleClient("qwen", "secret")
+
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+            self.assertEqual(client.list_models(), ["qwen-plus"])
+
+        self.assertEqual(
+            call.call_args.args[0].full_url,
+            "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models",
+        )
+        self.assertEqual(PROVIDERS["qwen"].environment_variable, "DASHSCOPE_API_KEY")
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {"QWEN_BASE_URL": "https://dashscope-us.aliyuncs.com/compatible-mode/v1/"},
+    )
+    def test_qwen_cloud_supports_regional_base_url(self):
+        client = OpenAICompatibleClient("qwen", "secret", "qwen-plus")
+        with patch(
+            "main.api_providers.urlopen",
+            return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
+        ) as call:
+            list(client.stream_chat([], []))
+
+        self.assertEqual(
+            call.call_args.args[0].full_url,
+            "https://dashscope-us.aliyuncs.com/compatible-mode/v1/chat/completions",
+        )
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {"DASHSCOPE_API_KEY": "", "QWEN_API_KEY": "alias-secret"},
+        clear=False,
+    )
+    def test_qwen_cloud_accepts_qwen_api_key_alias(self):
+        self.assertEqual(
+            PROVIDERS["qwen"].api_key_from_environment(), "alias-secret"
+        )
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {"QWEN_BASE_URL": "http://unsafe.example/v1"},
+    )
+    def test_qwen_cloud_rejects_insecure_base_url(self):
+        with self.assertRaisesRegex(ValueError, "Invalid Qwen Cloud"):
+            OpenAICompatibleClient("qwen", "secret")
+
     def test_cancel_closes_active_api_stream(self):
         client = OpenAICompatibleClient("groq", "secret", "model")
         response = Mock()
@@ -376,11 +424,11 @@ class RemoteAgentIntegrationTests(unittest.TestCase):
                 event.get("content") for event in events
                 if event.get("type") == "react_state"
             ]
-            self.assertIn("dispatch", phases)
-            self.assertIn("critique", phases)
-            self.assertIn("finish", phases)
+            self.assertIn("plan", phases)
+            self.assertIn("act", phases)
+            self.assertEqual(runtime.react.status()["phase"], "finish")
 
-    def test_prose_only_dispatch_falls_back_without_running_tools(self):
+    def test_prose_only_response_remains_a_normal_agent_answer(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             engine = ProseOnlyRemoteEngine()
@@ -395,19 +443,74 @@ class RemoteAgentIntegrationTests(unittest.TestCase):
 
             events = list(runtime.generate_stream("Review current workspace"))
 
-        named_choices = [request[2] for request in engine.api_client.requests[:2]]
-        expected = {
-            "type": "function",
-            "function": {"name": "react_dispatch"},
-        }
-        self.assertEqual(named_choices, [expected, expected])
-        self.assertEqual(runtime.react.status()["phase"], "ask_user")
+        named_choices = [request[2] for request in engine.api_client.requests]
+        self.assertEqual(named_choices, ["auto"])
+        self.assertEqual(runtime.react.status()["phase"], "finish")
         self.assertEqual(runtime.react.status()["steps"], 0)
         self.assertFalse(any(event.get("type") == "tool" for event in events))
         self.assertTrue(any(
-            "failed after 2 attempts" in str(event.get("content", ""))
+            "I'll inspect it now." in str(event.get("content", ""))
             for event in events
         ))
+
+    def test_prose_before_native_tool_call_does_not_skip_execution(self):
+        class MixedTurnClient:
+            provider_name = "Mixed API"
+            model = "mixed/model"
+
+            def __init__(self):
+                self.requests = []
+
+            def stream_chat(self, messages, tools, tool_choice="auto"):
+                self.requests.append((messages, tools, tool_choice))
+                if len(self.requests) == 1:
+                    yield {"type": "token", "content": "Let me read that first."}
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [{
+                            "id": "read-improvements",
+                            "name": "read_text_file",
+                            "arguments": json.dumps({"path": "IMPROVEMENTS.md"}),
+                        }],
+                    }
+                else:
+                    yield {"type": "token", "content": "The file says: reliable loop."}
+
+        class MixedTurnEngine:
+            backend = "remote_api"
+            current_mode = "api"
+
+            def __init__(self):
+                self.api_client = MixedTurnClient()
+                self.MODELS = {"api": {"path": self.api_client.model}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "IMPROVEMENTS.md").write_text(
+                "reliable loop", encoding="utf-8"
+            )
+            engine = MixedTurnEngine()
+            runtime = PydanticAgentRuntime(
+                engine,
+                workspace=workspace,
+                config=RuntimeConfig(persist_state=False),
+                permission_callback=lambda *_args: True,
+            )
+            events = list(runtime.generate_stream("Read IMPROVEMENTS.md"))
+
+        self.assertEqual(len(engine.api_client.requests), 2)
+        self.assertTrue(any(
+            event.get("type") == "tool_result"
+            and event.get("name") == "read_text_file"
+            for event in events
+        ))
+        transcript = "".join(
+            str(event.get("content", ""))
+            for event in events
+            if event.get("type") == "token"
+        )
+        self.assertIn("The file says: reliable loop.", transcript)
+        self.assertNotIn("Tool not executed", transcript)
 
 
 if __name__ == "__main__":

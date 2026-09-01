@@ -28,8 +28,47 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                     app._set_busy(True, "Generating")
                     await pilot.press("escape")
                     await pilot.pause()
+                    stop.assert_not_called()
+
+                    app._set_busy(True, "Generating", "generation")
+                    await pilot.press("escape")
+                    await pilot.pause()
                     stop.assert_called_once_with()
-                    self.assertIn("closing stream", app._activity_message)
+                    self.assertIn("Stopping generation", app._activity_message)
+
+    async def test_escape_during_model_load_requests_hard_stop(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            with patch.object(cli, "_request_generation_stop") as stop:
+                async with app.run_test() as pilot:
+                    app._set_busy(True, "Loading model", "model_loading")
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    stop.assert_called_once_with()
+                    self.assertIn("Stopping model load", app._activity_message)
+
+    async def test_escape_on_permission_dialog_stops_generation(self):
+        with TemporaryDirectory() as directory:
+            cli = OpenCLI(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            request = PermissionRequest(
+                category="file_write",
+                action="write file",
+                target="example.txt",
+                reason="test",
+                workspace=Path(directory),
+            )
+            with patch.object(cli, "_request_generation_stop") as stop:
+                async with app.run_test() as pilot:
+                    app._start_generation_activity()
+                    app.push_screen(PermissionScreen(request))
+                    await pilot.pause()
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    stop.assert_called_once_with()
 
     async def test_dynamic_activity_stops_on_first_token(self):
         with TemporaryDirectory() as directory:

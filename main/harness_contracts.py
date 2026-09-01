@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Iterable, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 SCHEMA_VERSION = 1
@@ -116,9 +116,44 @@ class TrustClass(str, Enum):
     IMPORTED_UNTRUSTED = "imported_untrusted"
 
 
+class ModelTurnDisposition(str, Enum):
+    """Host decision made only after one provider response is complete."""
+
+    FINAL = "final"
+    TOOL_CALLS = "tool_calls"
+    CANCELLED = "cancelled"
+    INVALID = "invalid"
+
+
 class HarnessModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_enum_values=False)
     schema_version: int = SCHEMA_VERSION
+
+
+class ToolCallIntent(HarnessModel):
+    """Provider-neutral tool proposal with a stable call identifier."""
+
+    call_id: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=128)
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelTurn(HarnessModel):
+    """A complete assistant turn, classified before framework finalization."""
+
+    disposition: ModelTurnDisposition
+    text: str = ""
+    tool_calls: tuple[ToolCallIntent, ...] = ()
+    source: str = "unknown"
+    finish_reason: str = ""
+
+    @model_validator(mode="after")
+    def validate_disposition(self) -> "ModelTurn":
+        if self.disposition == ModelTurnDisposition.TOOL_CALLS and not self.tool_calls:
+            raise ValueError("A tool-call turn requires at least one tool intent")
+        if self.disposition != ModelTurnDisposition.TOOL_CALLS and self.tool_calls:
+            raise ValueError("Only a tool-call turn may contain tool intents")
+        return self
 
 
 class ToolOutcome(HarnessModel):
@@ -426,6 +461,8 @@ __all__ = [
     "HarnessModel",
     "LedgerEvent",
     "MemoryRecord",
+    "ModelTurn",
+    "ModelTurnDisposition",
     "RiskLevel",
     "RunBudgets",
     "RunLifecycle",
@@ -433,6 +470,7 @@ __all__ = [
     "SCHEMA_VERSION",
     "SecretRedactor",
     "ToolManifest",
+    "ToolCallIntent",
     "ToolOutcome",
     "ToolStatus",
     "TrustClass",

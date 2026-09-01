@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import threading
 from contextlib import closing, contextmanager
@@ -206,6 +207,15 @@ class RunLedger:
                 );
                 CREATE INDEX IF NOT EXISTS memory_scope_active
                     ON memory_records_v2(session_id, namespace, scope, deleted_at);
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_v1
+                    USING fts5(
+                        memory_id UNINDEXED,
+                        session_id UNINDEXED,
+                        namespace UNINDEXED,
+                        scope UNINDEXED,
+                        content,
+                        tokenize='unicode61'
+                    );
                 CREATE TABLE IF NOT EXISTS workspace_leases (
                     session_id TEXT PRIMARY KEY,
                     run_id TEXT NOT NULL,
@@ -810,6 +820,20 @@ class RunLedger:
                     record.deleted_at.isoformat() if record.deleted_at else None,
                 ),
             )
+            connection.execute(
+                """
+                INSERT INTO memory_search_v1(
+                    memory_id, session_id, namespace, scope, content
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    record.memory_id,
+                    self.session_id,
+                    record.namespace,
+                    record.scope,
+                    record.content,
+                ),
+            )
         return record
 
     def list_memory(
@@ -830,6 +854,53 @@ class RunLedger:
                 "SELECT record_json FROM memory_records_v2 WHERE "
                 + " AND ".join(clauses)
                 + " ORDER BY created_at",
+                values,
+            ).fetchall()
+        return [MemoryRecord.model_validate_json(row["record_json"]) for row in rows]
+
+    def search_memory(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+        namespace: Optional[str] = None,
+        scope: Optional[str] = None,
+    ) -> list[MemoryRecord]:
+        """Return active memories ranked by local FTS5 relevance.
+
+        Search terms are host-normalized before reaching SQLite so user text
+        cannot alter the FTS query grammar.  Historical or deleted records stay
+        in the index for lineage, but never appear in recall results.
+        """
+        terms = re.findall(r"[\w-]{2,}", str(query).casefold(), flags=re.UNICODE)
+        if not terms:
+            return []
+        match = " OR ".join(f'"{term.replace(chr(34), "")}"' for term in terms[:16])
+        clauses = [
+            "memory_search_v1 MATCH ?",
+            "records.session_id = ?",
+            "records.deleted_at IS NULL",
+            "records.superseded_by_id IS NULL",
+            "(records.expires_at IS NULL OR records.expires_at > ?)",
+        ]
+        values: list[Any] = [match, self.session_id, utc_now().isoformat()]
+        if namespace:
+            clauses.append("records.namespace = ?")
+            values.append(namespace)
+        if scope:
+            clauses.append("records.scope = ?")
+            values.append(scope)
+        values.append(max(1, min(int(limit), 20)))
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT records.record_json
+                FROM memory_search_v1
+                JOIN memory_records_v2 AS records
+                    ON records.memory_id = memory_search_v1.memory_id
+                WHERE """
+                + " AND ".join(clauses)
+                + " ORDER BY bm25(memory_search_v1), records.created_at DESC LIMIT ?",
                 values,
             ).fetchall()
         return [MemoryRecord.model_validate_json(row["record_json"]) for row in rows]

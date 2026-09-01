@@ -20,19 +20,37 @@ class WorkspaceContext:
         self.current_directory = self.root
 
     def resolve(self, path: str = ".") -> Path:
-        """Resolve an absolute or current-directory-relative path within root."""
+        """Resolve an absolute, cwd-relative, or returned root-relative path.
+
+        Tool results expose paths relative to ``root``. When current directory is
+        nested, accepting those paths verbatim prevents accidental duplication such
+        as ``src/src/app.py`` on a follow-up read.
+        """
         cleaned = str(path or ".").strip()
         if not cleaned:
             cleaned = "."
         candidate = Path(cleaned).expanduser()
         if not candidate.is_absolute():
-            candidate = self.current_directory / candidate
+            candidate = self._relative_anchor(candidate) / candidate
         resolved = candidate.resolve()
         try:
             resolved.relative_to(self.root)
         except ValueError as error:
             raise ValueError("Path must stay inside trusted workspace") from error
         return resolved
+
+    def _relative_anchor(self, candidate: Path) -> Path:
+        """Choose root for reusable tool paths; current directory otherwise."""
+        current_relative = self.current_directory.relative_to(self.root)
+        current_parts = tuple(part.casefold() for part in current_relative.parts)
+        candidate_parts = tuple(part.casefold() for part in candidate.parts)
+        if (
+            current_parts
+            and len(candidate_parts) >= len(current_parts)
+            and candidate_parts[:len(current_parts)] == current_parts
+        ):
+            return self.root
+        return self.current_directory
 
     def resolve_mutation(self, path: str) -> Path:
         """Resolve a write target while rejecting symlinked path components.
@@ -45,7 +63,7 @@ class WorkspaceContext:
             raise ValueError("Mutation path cannot be empty")
         candidate = Path(cleaned).expanduser()
         if not candidate.is_absolute():
-            candidate = self.current_directory / candidate
+            candidate = self._relative_anchor(candidate) / candidate
         lexical = candidate.absolute()
         try:
             relative = lexical.relative_to(self.root)

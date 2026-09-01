@@ -73,6 +73,100 @@ class ToolRegistry:
         return tuple(sorted(self._items))
 
 
+@dataclass(frozen=True)
+class Toolset:
+    """Named capability group exposed through the command-only tool controls."""
+
+    name: str
+    description: str
+    tools: tuple[str, ...]
+
+
+class ToolsetRegistry:
+    """Host-owned tool grouping; models cannot enable capabilities themselves."""
+
+    def __init__(self, toolsets: Iterable[Toolset] = ()):
+        self._items: Dict[str, Toolset] = {}
+        for toolset in toolsets:
+            name = toolset.name.casefold().strip()
+            if not name or name in self._items:
+                raise ValueError(f"Invalid or duplicate toolset: {toolset.name!r}")
+            self._items[name] = Toolset(name, toolset.description, toolset.tools)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._items))
+
+    def normalize(self, enabled: Iterable[str]) -> tuple[str, ...]:
+        requested = tuple(dict.fromkeys(str(item).casefold().strip() for item in enabled))
+        unknown = sorted(set(requested) - set(self._items))
+        if unknown:
+            raise ValueError(f"Unknown toolset(s): {', '.join(unknown)}")
+        return tuple(name for name in self.names if name in requested)
+
+    def enabled_tools(self, enabled: Iterable[str]) -> frozenset[str]:
+        active = self.normalize(enabled)
+        return frozenset(
+            tool for name in active for tool in self._items[name].tools
+        )
+
+    def status(self, enabled: Iterable[str]) -> Dict[str, Dict[str, Any]]:
+        active = set(self.normalize(enabled))
+        return {
+            name: {
+                "enabled": name in active,
+                "description": toolset.description,
+                "tools": toolset.tools,
+            }
+            for name, toolset in sorted(self._items.items())
+        }
+
+
+def default_toolset_registry() -> ToolsetRegistry:
+    """Default capability groups, inspired by Hermes toolsets but OpenCLI-owned."""
+    return ToolsetRegistry(
+        (
+            Toolset(
+                "workspace",
+                "Inspect and modify files inside the approved workspace.",
+                (
+                    "get_working_directory", "set_working_directory",
+                    "list_allowed_roots", "list_files", "read_text_file",
+                    "search_text", "file_info", "write_text_file",
+                    "edit_text_file", "create_directory",
+                ),
+            ),
+            Toolset(
+                "web", "Fast search, deep research, and approved source fetches.",
+                ("web_search", "web_fetch"),
+            ),
+            Toolset(
+                "memory", "Recall trusted facts from prior OpenCLI sessions.",
+                ("search_memory",),
+            ),
+            Toolset(
+                "planning", "Use ReAct dispatch and persistent task plans.",
+                (
+                    "react_dispatch", "critique_and_plan", "get_task_plan",
+                    "create_task_plan", "add_task_plan_item",
+                    "update_task_plan_item",
+                ),
+            ),
+            Toolset(
+                "sandbox", "Run approved commands in an isolated backend.",
+                ("get_sandbox_status", "run_sandboxed_command"),
+            ),
+            Toolset(
+                "session", "Maintain the current session title.",
+                ("set_session_title",),
+            ),
+        )
+    )
+
+
+DEFAULT_TOOLSETS = default_toolset_registry().names
+
+
 def default_tool_registry(max_output_chars: int = 20_000) -> ToolRegistry:
     def manifest(
         name: str,
@@ -99,7 +193,10 @@ def default_tool_registry(max_output_chars: int = 20_000) -> ToolRegistry:
         [
             manifest("get_working_directory", CapabilityClass.READ),
             manifest(
-                "set_working_directory", CapabilityClass.READ, risk=RiskLevel.MEDIUM
+                "set_working_directory",
+                CapabilityClass.WRITE,
+                risk=RiskLevel.MEDIUM,
+                idempotent=False,
             ),
             manifest("list_allowed_roots", CapabilityClass.READ),
             manifest("list_files", CapabilityClass.READ, approval="file_read"),
@@ -143,6 +240,7 @@ def default_tool_registry(max_output_chars: int = 20_000) -> ToolRegistry:
                 approval="web",
                 timeout=45,
             ),
+            manifest("search_memory", CapabilityClass.READ),
             manifest("get_sandbox_status", CapabilityClass.READ),
             manifest(
                 "run_sandboxed_command",
@@ -464,7 +562,11 @@ __all__ = [
     "SemanticStagnationDetector",
     "ToolPolicy",
     "ToolRegistry",
+    "Toolset",
+    "ToolsetRegistry",
+    "DEFAULT_TOOLSETS",
     "default_tool_registry",
+    "default_toolset_registry",
     "evidence_id",
     "mutation_receipt",
     "UntrustedContentScanner",

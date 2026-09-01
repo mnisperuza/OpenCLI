@@ -80,6 +80,7 @@ class LlamaCppStreamTests(TestCase):
         engine._find_llama_cpp_executable = lambda: "llama-server"
         engine._llama_cpp_is_ready = lambda _url: False
         engine._llama_log_tail = lambda: "still loading"
+        engine._llama_log_download_failures = lambda: 0
         engine.shutdown = Mock()
         mocked_popen.return_value.poll.return_value = None
 
@@ -91,6 +92,78 @@ class LlamaCppStreamTests(TestCase):
         self.assertIn("within 1 seconds", message)
         self.assertIn("still loading", message)
         engine.shutdown.assert_called_once_with()
+
+    @patch("main.engine.open", new_callable=mock_open)
+    @patch("main.engine.subprocess.Popen")
+    def test_llama_cpp_startup_can_be_cancelled(self, mocked_popen, _open):
+        engine = object.__new__(OpenCLIEngine)
+        engine._llama_process = None
+        engine._llama_log = None
+        engine._llama_log_path = None
+        engine._llama_starting = False
+        engine.interrupt_handler = Mock()
+        engine.interrupt_handler.is_interrupted.return_value = True
+        engine._find_llama_cpp_executable = lambda: "llama-server"
+        engine._llama_cpp_is_ready = lambda _url: False
+        engine.shutdown = Mock()
+        mocked_popen.return_value.poll.return_value = None
+
+        success, message = engine._start_llama_cpp_server(
+            {"path": "test/model", "context": 2048}, "int4"
+        )
+
+        self.assertFalse(success)
+        self.assertEqual(message, "llama.cpp startup cancelled.")
+        engine.shutdown.assert_called_once_with()
+
+    @patch("main.engine.open", new_callable=mock_open)
+    @patch("main.engine.subprocess.Popen")
+    def test_llama_cpp_download_failure_stops_startup(self, mocked_popen, _open):
+        engine = object.__new__(OpenCLIEngine)
+        engine._llama_process = None
+        engine._llama_log = None
+        engine._llama_log_path = None
+        engine._llama_starting = False
+        engine.interrupt_handler = NeverInterrupted()
+        engine._find_llama_cpp_executable = lambda: "llama-server"
+        engine._llama_cpp_is_ready = lambda _url: False
+        engine._llama_log_download_failures = lambda: 1
+        engine._llama_log_tail = lambda: "download failed: connection reset"
+        engine.shutdown = Mock()
+        mocked_popen.return_value.poll.return_value = None
+
+        success, message = engine._start_llama_cpp_server(
+            {"path": "test/model", "context": 2048}, "int4"
+        )
+
+        self.assertFalse(success)
+        self.assertIn("could not download", message)
+        engine.shutdown.assert_called_once_with()
+
+    def test_stop_generation_terminates_only_in_progress_server_startup(self):
+        engine = object.__new__(OpenCLIEngine)
+        engine.interrupt_handler = Mock()
+        engine.api_client = None
+        engine._response_lock = threading.Lock()
+        engine._active_generation_response = None
+        engine._llama_starting = True
+        engine.shutdown = Mock()
+
+        engine.stop_generation()
+
+        engine.shutdown.assert_called_once_with()
+
+    def test_load_model_resets_and_clears_cancellation_state(self):
+        engine = object.__new__(OpenCLIEngine)
+        engine.interrupt_handler = Mock()
+        engine._model_loading = False
+        engine._load_model_impl = Mock(return_value=(True, "ready"))
+
+        result = engine.load_model("auto", "int4")
+
+        self.assertEqual(result, (True, "ready"))
+        engine.interrupt_handler.reset.assert_called_once_with()
+        self.assertFalse(engine._model_loading)
 
     @patch("main.engine.os.name", "nt")
     @patch("main.engine.subprocess.run")
@@ -141,6 +214,13 @@ class LlamaCppStreamTests(TestCase):
                 "mistralai/Ministral-3-14B-Instruct-2512-GGUF",
                 "LiquidAI/LFM2.5-8B-A1B-GGUF:Q4_K_M",
             )
+        )
+
+    @patch("main.engine.platform.system", return_value="Darwin")
+    @patch("main.engine.shutil.which", return_value=None)
+    def test_macos_uses_homebrew_llama_cpp_guidance(self, _which, _system):
+        self.assertEqual(
+            OpenCLIEngine._llama_cpp_install_hint(), "brew install llama.cpp"
         )
 
     @patch("main.engine.urlopen")

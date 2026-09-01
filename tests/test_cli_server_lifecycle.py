@@ -34,6 +34,16 @@ class ServerLifecycleTests(TestCase):
         cli.engine.stop_generation.assert_called_once_with()
         mocked_interrupt.assert_called_once_with()
 
+    def test_runtime_cancellation_does_not_stop_engine_twice(self):
+        cli = OpenCLI(dry_run=True)
+        cli.engine = Mock()
+        cli.agent_runtime = Mock()
+
+        cli._request_generation_stop()
+
+        cli.agent_runtime.request_cancel.assert_called_once_with()
+        cli.engine.stop_generation.assert_not_called()
+
     def make_cli(self):
         cli = object.__new__(OpenCLI)
         cli.engine = FakeEngine()

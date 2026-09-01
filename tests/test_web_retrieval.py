@@ -157,6 +157,58 @@ class WebRetrieverTests(TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be empty"):
             retriever.web_search("   ")
 
+    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    def test_deep_search_returns_bounded_evidence_not_raw_pages(self, _public_url):
+        client = FakeDDGS(
+            results=[
+                {"title": "One", "href": "https://one.example/article", "body": "one snippet"},
+                {"title": "Two", "href": "https://two.example/article", "body": "two snippet"},
+                {"title": "Three", "href": "https://three.example/article", "body": "three snippet"},
+            ],
+            extracted={"content": "Evidence sentence. " + "x" * 5_000},
+        )
+        retriever = WebRetriever(
+            client_factory=lambda: client,
+            max_fetches_per_turn=1,
+            deep_max_fetches=2,
+            deep_source_chars=320,
+            deep_packet_chars=1_000,
+        )
+
+        output = retriever.web_search(
+            "research bounded evidence", max_results=3, mode="deep", source="general"
+        )
+
+        self.assertEqual(output["mode"], "deep")
+        self.assertEqual(output["evidence_count"], 2)
+        self.assertEqual(len(output["evidence"][0]["excerpt"]), 320)
+        self.assertNotIn("x" * 1_000, output["evidence"][0]["excerpt"])
+        self.assertEqual(output["limits"]["max_fetches"], 2)
+
+    def test_arxiv_lane_marks_preprints(self):
+        retriever = WebRetriever(client_factory=FakeDDGS)
+        retriever._search_arxiv = lambda *_args: [
+            {
+                "title": "Paper",
+                "url": "https://arxiv.org/abs/1234.5678",
+                "domain": "arxiv.org",
+                "snippet": "Paper abstract",
+                "published_at": "2026-01-01T00:00:00Z",
+                "source_type": "arxiv",
+                "preprint": True,
+            }
+        ]
+
+        output = retriever.web_search("paper", source="arxiv")
+
+        self.assertEqual(output["lanes"], ("arxiv",))
+        self.assertTrue(output["results"][0]["preprint"])
+
+    def test_invalid_search_mode_is_rejected(self):
+        retriever = WebRetriever(client_factory=FakeDDGS)
+        with self.assertRaisesRegex(ValueError, "mode must be fast or deep"):
+            retriever.web_search("test", mode="wide")
+
 
 class FakeEngine:
     MODELS = {"test": {"path": "local/test-model"}}

@@ -76,6 +76,30 @@ class SessionMemoryStoreTests(TestCase):
         self.assertIn("FULL TOOL PAYLOAD", archive)
         self.assertNotIn("FULL TOOL PAYLOAD", context)
 
+    def test_error_payloads_are_excluded_from_archive_and_loaded_context(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            record = store.create()
+            transcript = (
+                "USER: inspect the project\n\n"
+                "TOOL RESULT [read_text_file] (call 1): "
+                '{"error": "Not a file: missing.md"}\n\n'
+                "TOOL VALIDATION ERROR: bad arguments\n\n"
+                "ASSISTANT: I used the available evidence."
+            )
+
+            store.save(record, transcript)
+            archive = store.load(record.path)
+            context = store.load_context(record.path)
+
+        self.assertNotIn("Not a file", archive)
+        self.assertNotIn("VALIDATION ERROR", archive)
+        self.assertNotIn("Not a file", context)
+        self.assertIn("ASSISTANT: I used the available evidence.", context)
+
     def test_tool_archive_is_bounded(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
