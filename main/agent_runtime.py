@@ -3237,6 +3237,27 @@ class PydanticAgentRuntime:
                 "ready": False,
                 "error": f"Run cannot resume from {state.lifecycle.value}.",
             }
+        started = next(
+            (
+                event
+                for event in self._state.ledger.events(run_id)
+                if event.event_type == "run.started"
+            ),
+            None,
+        )
+        provider, model = self._model_identity()
+        if started is not None and (
+            (started.provider and started.provider != provider)
+            or (started.model and started.model != model)
+        ):
+            return {
+                "ready": False,
+                "error": (
+                    "Run is pinned to "
+                    f"{started.provider or 'unknown'}:{started.model or 'unknown'}; "
+                    f"active model is {provider}:{model}."
+                ),
+            }
         reconciliation = self.reconcile_run(run_id)
         if reconciliation.get("uncertain"):
             return {

@@ -15,5 +15,5 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 printf '%s\n' 'Installing OpenCLI...'
-uv tool install --upgrade opencli
+uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
 printf '%s\n' 'OpenCLI installed. Run: opencli'

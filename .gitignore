@@ -45,6 +45,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 
 # Translations
 *.mo
@@ -85,3 +86,8 @@ Desktop.ini
 # Temporary files
 *.tmp
 *.temp
+
+# Local repository-inspection and package-verification artifacts
+.opencli-wheel-check/
+.opencli-wheel-verify/
+repomix-output-*.md

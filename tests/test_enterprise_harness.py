@@ -472,6 +472,45 @@ class ReliabilityAndRecoveryTests(TestCase):
             self.assertIn("run.resumed", types)
             self.assertIn("run.finished", types)
 
+    def test_resume_rejects_provider_or_model_switch(self):
+        class Client:
+            provider = "ds2api"
+            model = "deepseek/model"
+
+        class Engine:
+            backend = "remote_api"
+            current_mode = "api"
+            api_client = Client()
+            MODELS = {"api": {"path": api_client.model}}
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            db = root / "state.sqlite3"
+            ledger = RunLedger(db, "session")
+            original = ledger.begin_run(
+                RunState(
+                    run_id=new_id("run"),
+                    session_id="session",
+                    turn_id=new_id("turn"),
+                    goal="resume pinned mission",
+                ),
+                provider="litellm",
+                model="claude/model",
+            )
+            paused = ledger.transition(
+                original, RunLifecycle.WAITING_USER, reason="Need user input"
+            )
+            runtime = PydanticAgentRuntime(
+                Engine(),
+                workspace=root,
+                config=RuntimeConfig(state_db_path=db, session_id="session"),
+            )
+
+            result = runtime.prepare_resume(paused.run_id)
+
+            self.assertFalse(result["ready"])
+            self.assertIn("pinned to litellm:claude/model", result["error"])
+
 
 class WorkspaceRaceSafetyTests(TestCase):
     def test_mutation_path_rejects_symlink_components(self):

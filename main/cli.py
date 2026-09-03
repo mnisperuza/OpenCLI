@@ -3018,7 +3018,7 @@ class OpenCLI:
     /model    {Colors.DIM}Open interactive model picker{Colors.RESET}
     /model-add {Colors.DIM}Add and load a GGUF model profile{Colors.RESET}
     /model-rm  {Colors.DIM}Remove a user-added model profile{Colors.RESET}
-    /api       {Colors.DIM}Connect Groq, Gemini, or OpenRouter{Colors.RESET}
+    /api       {Colors.DIM}Connect an API model provider{Colors.RESET}
     /api-md    {Colors.DIM}Change active API model{Colors.RESET}
     /api-del   {Colors.DIM}Remove saved API provider/model profile{Colors.RESET}
 

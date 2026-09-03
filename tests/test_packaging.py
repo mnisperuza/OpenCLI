@@ -14,6 +14,17 @@ class PackagingTests(TestCase):
     def test_cli_uses_package_version(self):
         self.assertEqual(OpenCLI.VERSION, __version__)
 
+    def test_changelog_current_release_matches_package_version(self):
+        content = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        release_headings = [
+            line.removeprefix("## ").strip()
+            for line in content.splitlines()
+            if line.startswith("## ")
+        ]
+
+        self.assertTrue(release_headings)
+        self.assertEqual(release_headings[0], __version__)
+
     def test_pyproject_loads_version_dynamically(self):
         with (PROJECT_ROOT / "pyproject.toml").open("rb") as file:
             metadata = tomllib.load(file)
@@ -27,6 +38,7 @@ class PackagingTests(TestCase):
         )
         self.assertEqual(project["name"], "opencli")
         self.assertEqual(project["license"], "Apache-2.0")
+        self.assertEqual(project["readme"], "README.md")
         self.assertEqual(project["scripts"]["opencli"], "opencli.cli:main")
         self.assertTrue(all("OpenCLI" in url for url in project["urls"].values()))
 
@@ -58,7 +70,27 @@ class PackagingTests(TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("uv tool install --upgrade opencli", shell)
-        self.assertIn("uv tool install --upgrade opencli", powershell)
+        install_command = (
+            "uv tool install --upgrade "
+            "git+https://github.com/mnisperuza/OpenCLI.git"
+        )
+        self.assertIn(install_command, shell)
+        self.assertIn(install_command, powershell)
+        self.assertNotIn("uv tool install --upgrade opencli", shell)
+        self.assertNotIn("uv tool install --upgrade opencli", powershell)
         self.assertIn("astral.sh/uv/install.sh", shell)
         self.assertIn("astral.sh/uv/install.ps1", powershell)
+
+    def test_release_automation_has_tag_and_pypi_trusted_publishing_paths(self):
+        workflow = (PROJECT_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        release_guide = (PROJECT_ROOT / "docs" / "RELEASING.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('tags: ["v*"]', workflow)
+        self.assertIn("scripts/verify_release.py", workflow)
+        self.assertIn("scripts/package_smoke.py", workflow)
+        self.assertIn("pypa/gh-action-pypi-publish@release/v1", workflow)
+        self.assertIn("Trusted Publishing", release_guide)

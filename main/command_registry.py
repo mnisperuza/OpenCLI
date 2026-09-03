@@ -65,7 +65,7 @@ COMMAND_SPECS: tuple[CommandSpec, ...] = (
     CommandSpec("/model", "/model [NAME]", "Select local or saved model", "Models"),
     CommandSpec("/model-add", "/model-add", "Add GGUF model profile", "Models", ("/modeladd",)),
     CommandSpec("/model-rm", "/model-rm", "Remove saved model profile", "Models", ("/modelrm",)),
-    CommandSpec("/api", "/api", "Connect hosted model provider", "Models"),
+    CommandSpec("/api", "/api", "Connect API model provider", "Models"),
     CommandSpec("/api-md", "/api-md", "Change hosted model", "Models"),
     CommandSpec("/api-del", "/api-del", "Remove API profile", "Models"),
     CommandSpec("/paste", "/paste", "Toggle multiline paste mode", "Input", ("/multiline",)),

@@ -1,27 +1,67 @@
+<div align="center">
+
 # OpenCLI
 
-**A local-first coding and research agent for trusted terminal workspaces.**
+### A local-first coding and research agent for trusted terminal workspaces.
 
-OpenCLI combines local GGUF inference through llama.cpp with optional hosted models, permission-aware tools, durable sessions, and an evidence-conscious agent harness. It is for people who want a capable terminal agent without giving up control of their workspace, context, or execution boundary.
+[![CI](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml/badge.svg)](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-Apache--2.0-0A66C2?logo=apache&logoColor=white)](LICENSE)
+[![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-4C8BF5)](#platform-setup)
+[![Local-first](https://img.shields.io/badge/Inference-Local--first-2E8B57)](#models-without-lock-in)
+[![Providers](https://img.shields.io/badge/Providers-15-7B61FF)](#direct-api-providers)
+[![Release](https://img.shields.io/badge/Release-1.7.0-0A66C2)](CHANGELOG.md)
+[![GitHub last commit](https://img.shields.io/github/last-commit/mnisperuza/OpenCLI?logo=github)](https://github.com/mnisperuza/OpenCLI/commits/main)
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![CI](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml/badge.svg)](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml)
+[Install](#install) · [First session](#first-session) · [Models](#models-without-lock-in) · [Safety](#designed-for-trusted-workspaces) · [Roadmap](docs/ROADMAP.md) · [Contributing](#development)
 
-> OpenCLI is an agent harness, not an autonomous deployment platform. It works in a workspace you trust, asks before sensitive actions, and keeps web/tool content as untrusted data. Review generated changes before shipping them.
+</div>
 
 ![OpenCLI workspace preview](assets/preview.png)
 
-## Why OpenCLI
+OpenCLI is a terminal workspace for getting real work done with an agent while keeping control over the model, workspace, tools, and execution boundary. It runs local GGUF models through llama.cpp by default, connects to hosted providers only when you choose to, and treats permissions, evidence, and recovery as product features—not afterthoughts.
 
-- **Bring your model.** Use a local GGUF model with llama.cpp, or connect Groq, Gemini, OpenRouter, or Qwen Cloud for a session without storing API keys.
-- **Useful, not reckless.** File access, edits, web use, and sandbox commands are permission-gated and constrained to the trusted workspace.
-- **Real agent execution.** Natural multi-tool ReAct turns, evidence-backed completion, bounded retries, recovery after interruption, and clear plans.
-- **Research without context bloat.** Fast search returns compact top results; deep research gathers and compresses diverse web, news, instant-answer, and arXiv evidence with source provenance.
-- **Local, durable control.** Sessions, notes, plans, and run receipts stay local. Old tool errors are excluded from future memory context.
-- **A terminal that respects attention.** A Textual workspace with streaming, approvals, diffs, plan status, context accounting, slash completion, and a classic line CLI when you prefer it.
+> OpenCLI works inside a workspace you trust. It asks before sensitive actions, keeps web and tool content untrusted, and never turns a generated answer into an automatic deployment.
+
+## Start here
+
+```bash
+# Install, then enter the repository or folder you want the agent to inspect.
+opencli
+```
+
+Choose one path after launch:
+
+| Path | First move | Best for |
+|---|---|---|
+| Local | Select `/model`; OpenCLI starts or connects to llama.cpp. | Private, offline-capable GGUF work. |
+| Hosted | Run `/api`, choose a provider, then choose a discovered model. | Fast access to a managed model. |
+| Gateway | Run `/api`, choose FreeLLMAPI, LiteLLM, or DS2API. | An existing local or organization-managed route. |
+
+API keys exist only in the current process. OpenCLI stores provider/model
+profiles, never provider secrets.
+
+## A capable agent with a visible boundary
+
+| What you need | What OpenCLI does |
+|---|---|
+| Keep work local | Starts with a llama.cpp-backed GGUF workflow; sessions, plans, notes, and receipts stay on your machine. |
+| Use the model that fits | Switch between local models, direct cloud APIs, or optional gateways without changing the agent workflow. |
+| Make changes safely | Gates files, web access, and sandbox execution with explicit permissions and trusted-workspace boundaries. |
+| Finish long tasks reliably | Keeps a durable ledger, bounded agent turns, recovery controls, context accounting, and evidence-aware completion. |
+| Research without noise | Turns web research into a compact, sourced evidence packet instead of flooding the model context with raw pages. |
+
+## Built for the terminal, not bolted onto it
+
+- **A real workspace UI.** Streaming output, diffs, approvals, plan state, context usage, slash completion, and a classic line CLI when you want less interface.
+- **Agentic without being reckless.** Multi-tool ReAct turns, recovery after interruption, repeated-action detection, and hard limits on runaway work.
+- **Security that stays legible.** Workspace-scoped file access, explicit web approval, sandbox-only command execution, secret-aware exclusions, and no host-shell fallback.
+- **Memory with hygiene.** Local session archives, user notes, task plans, and compact recovery capsules—without treating stale tool errors as future instructions.
+- **Model choice without lock-in.** Local llama.cpp first; direct cloud APIs and OpenAI-compatible gateways are opt-in, session-scoped alternatives.
 
 ## Install
 
-OpenCLI supports Python 3.10 through 3.12 on macOS, Linux, and Windows.
+OpenCLI supports Python 3.10–3.12 on Windows, macOS, and Linux. The recommended installers use `uv` and install the current public source from GitHub into an isolated tool environment.
 
 ### Quick install
 
@@ -37,19 +77,18 @@ Windows PowerShell:
 irm https://raw.githubusercontent.com/mnisperuza/OpenCLI/main/scripts/install.ps1 | iex
 ```
 
-These wrappers install OpenCLI into an isolated tool environment with `uv`.
-They install `uv` first when it is unavailable and can be run again to upgrade
-an existing OpenCLI installation.
+Run either command again to update your installed tool. If the new command is not visible immediately, open a new terminal so its tool directory is on `PATH`.
 
 ### Install with pip
 
+Install the current public source directly from GitHub:
+
 ```bash
-python -m pip install --upgrade pip
-python -m pip install opencli
+python -m pip install --upgrade "git+https://github.com/mnisperuza/OpenCLI.git"
 opencli
 ```
 
-The Textual workspace is the default. Use the traditional line interface when you need a simple terminal session:
+The Textual workspace is the default. For a simple line-oriented session:
 
 ```bash
 opencli --cli
@@ -61,27 +100,14 @@ python -m opencli --cli
 
 | Platform | Local GGUF setup | Notes |
 |---|---|---|
-| macOS (Apple Silicon or Intel) | `brew install llama.cpp` | Apple Silicon uses PyTorch MPS when direct model loading is selected. llama.cpp is recommended for GGUF. |
+| Windows | `winget install llama.cpp` | Native PowerShell and the Textual workspace are supported. Docker sandboxing needs Docker Desktop. |
+| macOS | `brew install llama.cpp` | llama.cpp is the recommended GGUF path; direct model loading can use Apple MPS. |
 | Linux | Install llama.cpp and put `llama-server` on `PATH` | Docker sandbox support is available when Docker is installed. |
-| Windows | `winget install llama.cpp` | Native PowerShell and the Textual workspace are supported. Docker requires Docker Desktop. |
 
-For a local model, start OpenCLI and choose `/model`, or let it start a local `llama-server`. You can also point at an existing compatible server:
+Point OpenCLI at an already-running local server when you prefer to manage it yourself:
 
 ```bash
 opencli --llama-cpp-url http://127.0.0.1:8080/v1
-```
-
-Optional installs:
-
-```bash
-# E2B sandbox integration
-python -m pip install "opencli[sandbox]"
-
-# Full optional acceleration/sandbox set (platform-aware)
-python -m pip install "opencli[full]"
-
-# Contributor/release checks
-python -m pip install "opencli[enterprise]" "pytest>=8,<10"
 ```
 
 ## First session
@@ -93,72 +119,105 @@ Trust this workspace? [y/N] y
 You > inspect this project and tell me how to run its tests
 ```
 
-OpenCLI asks for workspace trust before enabling agent tools. It then asks for each sensitive capability unless you choose a session- or workspace-level approval. API keys are read from the process environment or requested for the current session; they are never saved in the profile store.
-
-For Qwen Cloud, set `DASHSCOPE_API_KEY` (or `QWEN_API_KEY`) and choose **Qwen Cloud (Alibaba Model Studio)** from `/api`. International accounts default to Alibaba's Singapore-compatible endpoint. Set `QWEN_BASE_URL` to the OpenAI-compatible URL issued for your region or workspace when needed; API key and endpoint regions must match.
+OpenCLI opens in its local model workflow. The `auto` profile uses a GGUF model through llama.cpp; APIs and gateways are explicit choices through `/api` or `--api start` and never replace the local default.
 
 Try these next:
 
 ```text
 /model                         # choose a local model
-/api                            # connect Groq, Gemini, OpenRouter, or Qwen Cloud
-/search deep                   # make research the default search depth
-/status                         # inspect model, tools, memory, and sandbox
-/plan add Add a regression test # create a visible task plan
+/api                            # choose an API provider and model
+/search deep                   # make sourced research the default search mode
+/status                         # inspect model, tools, memory, and sandbox state
+/plan add Add a regression test # create a visible, persistent task plan
 ```
 
-## What it can do
+Good first prompts are concrete and reviewable:
 
-### Model and provider support
+```text
+Explain this repository's test command, then run it in the configured sandbox.
+Find the error path for API model selection. Propose a small fix; wait for approval before editing.
+Read CHANGELOG.md and summarize only the changes that affect provider behavior.
+```
 
-| Capability | Details |
+## Models without lock-in
+
+### Local by default
+
+OpenCLI connects to a local llama.cpp OpenAI-compatible server, discovers supported local installations, and can start `llama-server` for a chosen GGUF model. Local inference remains the default path even after you configure hosted providers.
+
+### Direct API providers
+
+Use `/api` to select a provider and discover its selectable models. API keys are read from the environment or requested for the current session; OpenCLI never saves them in its profile store.
+
+| Provider family | Providers |
 |---|---|
-| Local inference | GGUF models through a local llama.cpp OpenAI-compatible server; automatic discovery on `PATH`, Homebrew macOS locations, and Windows WinGet locations. |
-| Hosted inference | Groq, Gemini, OpenRouter, and Qwen Cloud with streamed chat and native tool calls where a provider supports them. |
-| Model profiles | Context window, output reserve, tools, vision, and reasoning capabilities are model-aware and can be overridden per workspace. |
-| Media | Bounded image normalization and supported system-clipboard image attachment on Windows and macOS. |
-| Context | Prompt accounting, tool-result pruning, hot-turn retention, and structured compaction before context exhaustion. |
+| Fast hosted inference | Groq, Cerebras, Fireworks AI, Together AI, NVIDIA NIM |
+| General hosted models | OpenAI, DeepSeek, xAI, Gemini, Mistral AI, OpenRouter, Qwen Cloud |
+| Local or self-hosted gateways | FreeLLMAPI, LiteLLM, DS2API |
 
-### Agent harness
+All providers use streamed OpenAI-compatible chat and native tool calls where the selected model supports them.
 
-OpenCLI’s ReAct runtime lets a model make ordinary tool calls and multiple independent calls in one response. The host keeps the system reliable without forcing a rigid synthetic loop:
+### FreeLLMAPI: one local gateway for configured free tiers
 
-- 24 model-call budget and an absolute 20 tool-step ceiling per request.
-- Warning-first repeated-action and failure detection for exploratory work.
-- Tool result classification before final-answer handling, so executable calls are not lost to a premature final response.
-- Typed outcomes, append-only run ledger, mutation receipts, crash reconciliation, and resume/recover controls.
-- Evidence requirements for task-plan completion and mutation claims.
-- ReAct coaching can be disabled with `/react off`; safety, permissions, and runaway limits remain active.
+[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) can consolidate the free tiers of upstream providers you configure. Start it locally, add your upstream keys in its dashboard, then give OpenCLI only its unified key:
 
-OpenCLI does not request, expose, or persist private chain-of-thought. It shows only user-useful progress, tool state, and concise reasoning summaries.
+```powershell
+$env:FREELLMAPI_API_KEY = "freellmapi-your-unified-key"
+# Optional for a different local port or a remote HTTPS deployment:
+$env:FREELLMAPI_BASE_URL = "http://127.0.0.1:3001/v1"
+```
 
-### Workspace tools
+Choose **FreeLLMAPI Gateway** in `/api`. OpenCLI asks it for ready-only models, so the picker excludes models without an enabled upstream key. For steady agent behavior, select an exact logical model; choose `auto` only when cross-model routing is intentional.
 
-| Tool family | What OpenCLI can do | Guardrail |
-|---|---|---|
-| Files | List, read, search, inspect, create directories, write, and make bounded text edits | Paths remain inside the trusted workspace; protected and secret-like paths are blocked. |
-| Web | Search and fetch public sources | Explicit web approval; pages and search results are untrusted data. |
-| Plans | Create, update, and inspect persistent task plans | Completion and dismissal are evidence-aware. |
-| Sandboxes | Run argv commands in Docker or a connected E2B sandbox | No host-shell fallback; lifecycle and sync stay user-controlled. |
-| Memory | Save user notes, resume sessions, import one compact historical capsule | Raw tool/validation error payloads are excluded from durable model context. |
-| Delegation | Run bounded work against a disposable isolated snapshot | Output is returned as data and never silently merges workspace changes. |
+### LiteLLM and DS2API
 
-### Web search and deep research
+LiteLLM remains available as an optional gateway for authorized cloud or local providers:
 
-`/search fast` is the default: compact, ranked top results for a quick answer. `/search deep` builds a bounded evidence packet rather than pouring raw pages into the prompt:
+```powershell
+$env:LITELLM_API_KEY = "sk-opencli"
+$env:LITELLM_BASE_URL = "http://127.0.0.1:4000" # optional override
+```
 
-| Source lane | Role in deep research |
+DS2API is available for compatibility testing and is intentionally kept separate while its behavior is reviewed:
+
+```powershell
+$env:DS2API_API_KEY = "your-config-key"
+$env:DS2API_BASE_URL = "http://127.0.0.1:6011/v1" # Docker Compose host mapping
+```
+
+Plain HTTP is accepted only for loopback gateways. Remote gateways must use HTTPS.
+
+## Designed for trusted workspaces
+
+OpenCLI gives the agent useful tools without granting ambient authority.
+
+| Surface | Boundary |
 |---|---|
-| General web | Breadth and coverage |
-| News | Recent or breaking developments |
-| Instant answers | Fast, precise factual checks |
-| arXiv | Academic and citable research; clearly labeled as preprints |
+| Files | Reads, writes, and bounded edits stay inside the trusted workspace; protected and secret-like paths are blocked. |
+| Web | Search and fetch require explicit approval; every result is treated as untrusted data. |
+| Shell work | Commands run only inside a user-selected Docker or E2B sandbox—never by silently falling back to the host shell. |
+| Changes | Mutations carry receipts; recovery, verification, and task-plan completion are evidence-aware. |
+| Sessions | Historical archives are text, not executable instructions; raw tool and validation errors are kept out of durable model context. |
 
-OpenCLI deduplicates sources, selects diverse pages where useful, preserves citations and excerpts, and asks the model to separate sourced facts, inference, uncertainty, and disagreement. Deep research is bounded to six sources and 12,000 characters of evidence; it is deliberately not unlimited browsing.
+Docker sandboxes use ephemeral containers with network disabled, a read-only root filesystem, dropped capabilities, no privilege escalation, and CPU/RAM/PID limits. The workspace mounts read-only unless you grant a write approval.
 
-## Commands
+```text
+/sandbox docker python:3.12-slim
+!python -V
+!!python -m pytest -q
+```
 
-Type `/` in the Textual workspace for filtered command completion. Invalid or mistyped slash commands are handled locally with the correct usage; they do not consume a model turn.
+E2B sandboxes are explicitly connected or created by you. OpenCLI does not create, stop, push, or pull a remote sandbox on the agent’s behalf.
+
+## Research that respects context
+
+`/search fast` returns compact ranked results. `/search deep` builds a bounded evidence packet from general web, news, instant answers, and arXiv; it deduplicates sources, preserves citations, and keeps sourced facts separate from inference and uncertainty.
+
+Deep research is deliberately bounded to six sources and 12,000 characters of evidence. The point is useful research inside an agent run—not unlimited browsing disguised as context.
+
+## Command map
+
+Type `/` in the Textual workspace for filtered command completion. Invalid slash commands are handled locally and do not consume a model turn.
 
 | Area | Commands |
 |---|---|
@@ -167,62 +226,27 @@ Type `/` in the Textual workspace for filtered command completion. Invalid or mi
 | Agent | `/tools`, `/tools-on`, `/tools-off`, `/tool-auto on\|off`, `/react on\|off`, `/harness status` |
 | Research | `/web on\|off`, `/web always`, `/web ask`, `/search fast\|deep\|status` |
 | Workspace | `/pwd`, `/cd PATH`, `/roots`, `/permissions`, `/permissions reset` |
-| Plans | `/plan`, `/plan add STEP`, `/plan set ID STATUS`, `/plan clear` |
-| Memory | `/memory`, `/memory notes`, `/memory clear`, `/memory export`, `/remember TEXT`, `/session-name TEXT` |
+| Plans and memory | `/plan`, `/plan add STEP`, `/memory`, `/remember TEXT`, `/session-name TEXT` |
 | Sandboxes | `/sandbox docker [IMAGE]`, `/sandbox e2b connect ID`, `/sandbox push`, `/sandbox pull`, `/sandbox off` |
 | Session | `/new`, `/history`, `/clear`, `/exit` |
 
-Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approved one after selecting a sandbox. Commands are parsed as argv, not sent to a host shell.
+Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approved one. Commands are parsed as argv, not passed through a host shell.
 
-## Docker and E2B
+## Configuration
 
-Docker uses ephemeral containers with network disabled, a read-only root filesystem, dropped capabilities, no privilege escalation, and CPU/RAM/PID limits. The workspace mounts read-only unless a write approval is granted.
-
-```text
-/sandbox docker python:3.12-slim
-!python -V
-!!python -m pytest -q
-```
-
-E2B is explicitly connected or created by the user. OpenCLI does not create, connect, stop, push, or pull an E2B sandbox on the agent’s behalf. Transfers are bounded, exclude secrets and environments, and reject local conflicts.
-
-```text
-/sandbox e2b connect YOUR_SANDBOX_ID
-/sandbox push
-!python -m pytest -q
-/sandbox pull
-```
-
-## Configuration and data
-
-| Location | Purpose |
+| Setting | Purpose |
 |---|---|
-| `.opencli/config.toml` | Workspace-local model capability overrides. The agent cannot modify it through file tools. |
+| `.opencli/config.toml` | Workspace-local model capability overrides; the agent cannot modify it with file tools. |
 | `~/.opencli/sessions/` | Local Markdown session archives scoped by workspace. |
-| `~/.opencli/errors.log` | Local diagnostic log, never loaded as model memory. |
-| `HF_TOKEN` or `HUGGINGFACE_HUB_TOKEN` | Optional Hugging Face token for the current process. |
-| `E2B_API_KEY` | Required only when using E2B. |
-| `OPENCLI_LLAMA_CPP_URL` | Override local llama.cpp server URL. |
-| `OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT` | Startup timeout in seconds; default 900. |
-| `OPENCLI_LLAMA_CPP_DOWNLOAD_FAILURE_LIMIT` | Explicit llama.cpp Hugging Face download failures tolerated before startup stops; default 1. |
+| `OPENCLI_LLAMA_CPP_URL` | Override the local llama.cpp endpoint. |
+| `OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT` | Startup timeout in seconds; default `900`. |
+| `GROQ_API_KEY`, `OPENAI_API_KEY`, `CEREBRAS_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `NVIDIA_API_KEY`, `GEMINI_API_KEY` | Direct-provider keys, read for the current process only. |
+| `MISTRAL_API_KEY`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY` | Additional direct-provider keys, read for the current process only. |
+| `OPENROUTER_API_KEY`, `DASHSCOPE_API_KEY` or `QWEN_API_KEY` | OpenRouter and Qwen Cloud keys. |
+| `FREELLMAPI_API_KEY`, `LITELLM_API_KEY`, `DS2API_API_KEY` | Optional gateway keys. |
 | `OPENCLI_HARNESS_MODE` | `v2` (default) or `legacy` compatibility harness. |
 
-Sessions are historical text, never executable instructions. Tool results are pruned after consumption; a bounded local archive preserves useful results without repeatedly burning model context. `/compact` creates a structured summary using the active model and retains recent complete turns.
-
-## Python library
-
-The CLI is OpenCLI’s primary interface. For integrations, import from the stable `opencli` namespace rather than the internal `main` package:
-
-```python
-from opencli import OpenCLI, OpenCLIEngine, __version__
-
-app = OpenCLI(dry_run=True)
-print(__version__)
-```
-
-`opencli` also exports the backend, tool-provider, permission, session, and sandbox contracts for typed integrations. The UI and model runtime load lazily so importing the package does not immediately initialize a model.
-
-## Development and releases
+## Development
 
 ```bash
 git clone https://github.com/mnisperuza/OpenCLI.git
@@ -235,22 +259,13 @@ python -m compileall -q main opencli
 python -m pytest -q
 ```
 
-The release gate covers Python 3.10, 3.11, and 3.12 on Ubuntu, Windows, and macOS. Full regression runs on Ubuntu. Changes to harness behavior must also pass the evidence, permission, recovery, redaction, and compaction gates in [docs/HARNESS_RELEASE_GATES.md](docs/HARNESS_RELEASE_GATES.md).
+The release workflow covers Python 3.10, 3.11, and 3.12 on Ubuntu, Windows, and macOS, including a clean built-wheel smoke test on every platform. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request, [docs/HARNESS_RELEASE_GATES.md](docs/HARNESS_RELEASE_GATES.md) for agent-harness gates, [docs/RELEASING.md](docs/RELEASING.md) for tag and PyPI setup, and [SECURITY.md](SECURITY.md) for responsible disclosure.
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request and [SECURITY.md](SECURITY.md) for responsible disclosure.
+## Scope and support
 
-## Current scope
+OpenCLI is designed for trusted local development and research workflows. MCP servers, third-party plugins, background cloud agents, messaging gateways, editor integrations, desktop installers, and automatic updates are not yet presented as stable product surface.
 
-OpenCLI is ready for trusted local development and research workflows. The following are intentionally not presented as stable product surface yet:
-
-- MCP servers and third-party plugins.
-- Background cloud agents, messaging gateways, and editor integrations.
-- A desktop installer or automatic update service.
-- Guaranteed tool calling from every local model; weak models may need `/tool-auto on` for deterministic routing.
-
-## Support
-
-Open an issue at [GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) with your OpenCLI version, OS and architecture, Python version, selected model/provider, command, and a redacted error. For security reports, use the process in [SECURITY.md](SECURITY.md).
+For help, open an issue at [GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) with your OpenCLI version, operating system, Python version, selected provider/model, command, and a redacted error.
 
 ## License
 

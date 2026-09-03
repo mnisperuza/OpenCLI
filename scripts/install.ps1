@@ -11,5 +11,5 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Installing OpenCLI..."
-uv tool install --upgrade opencli
+uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
 Write-Host "OpenCLI installed. Run: opencli"

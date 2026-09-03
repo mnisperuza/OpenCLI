@@ -30,6 +30,253 @@ class FakeResponse:
 
 
 class ApiProviderClientTests(unittest.TestCase):
+    def test_direct_providers_precede_optional_gateways(self):
+        self.assertEqual(next(iter(PROVIDERS)), "groq")
+        self.assertGreaterEqual(len(PROVIDERS), 15)
+
+    def test_additional_direct_providers_use_openai_compatible_defaults(self):
+        expected = {
+            "cerebras": (
+                "Cerebras",
+                "https://api.cerebras.ai/v1",
+                "CEREBRAS_API_KEY",
+            ),
+            "openai": (
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "OPENAI_API_KEY",
+            ),
+            "deepseek": (
+                "DeepSeek",
+                "https://api.deepseek.com",
+                "DEEPSEEK_API_KEY",
+            ),
+            "xai": (
+                "xAI",
+                "https://api.x.ai/v1",
+                "XAI_API_KEY",
+            ),
+            "nvidia": (
+                "NVIDIA NIM",
+                "https://integrate.api.nvidia.com/v1",
+                "NVIDIA_API_KEY",
+            ),
+            "mistral": (
+                "Mistral AI",
+                "https://api.mistral.ai/v1",
+                "MISTRAL_API_KEY",
+            ),
+            "fireworks": (
+                "Fireworks AI",
+                "https://api.fireworks.ai/inference/v1",
+                "FIREWORKS_API_KEY",
+            ),
+            "together": (
+                "Together AI",
+                "https://api.together.xyz/v1",
+                "TOGETHER_API_KEY",
+            ),
+        }
+
+        for provider, (name, base_url, environment_variable) in expected.items():
+            definition = PROVIDERS[provider]
+            self.assertEqual(definition.name, name)
+            self.assertEqual(definition.base_url, base_url)
+            self.assertEqual(definition.environment_variable, environment_variable)
+            self.assertEqual(
+                OpenAICompatibleClient(provider, "secret").base_url,
+                base_url,
+            )
+
+    def test_additional_direct_provider_model_routes_are_correct(self):
+        expected = {
+            "cerebras": "https://api.cerebras.ai/v1/models",
+            "openai": "https://api.openai.com/v1/models",
+            "deepseek": "https://api.deepseek.com/models",
+            "xai": "https://api.x.ai/v1/models",
+            "nvidia": "https://integrate.api.nvidia.com/v1/models",
+            "mistral": "https://api.mistral.ai/v1/models",
+            "fireworks": "https://api.fireworks.ai/inference/v1/models",
+            "together": "https://api.together.xyz/v1/models",
+        }
+        payload = json.dumps({"data": [{"id": "provider-model"}]}).encode()
+
+        for provider, url in expected.items():
+            with self.subTest(provider=provider):
+                client = OpenAICompatibleClient(provider, "secret")
+                with patch(
+                    "main.api_providers.urlopen", return_value=FakeResponse(payload)
+                ) as call:
+                    self.assertEqual(client.list_models(), ["provider-model"])
+                request = call.call_args.args[0]
+                self.assertEqual(request.full_url, url)
+                self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+
+    def test_new_direct_providers_share_streaming_tool_contract(self):
+        expected = {
+            "openai": "https://api.openai.com/v1/chat/completions",
+            "deepseek": "https://api.deepseek.com/chat/completions",
+            "xai": "https://api.x.ai/v1/chat/completions",
+            "nvidia": "https://integrate.api.nvidia.com/v1/chat/completions",
+        }
+        tools = [{"type": "function", "function": {"name": "inspect_workspace"}}]
+
+        for provider, url in expected.items():
+            with self.subTest(provider=provider):
+                client = OpenAICompatibleClient(provider, "secret", "agent-model")
+                with patch(
+                    "main.api_providers.urlopen",
+                    return_value=FakeResponse(lines=[b"data: [DONE]\\n"]),
+                ) as call:
+                    list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
+
+                request = call.call_args.args[0]
+                body = json.loads(request.data.decode("utf-8"))
+                self.assertEqual(request.full_url, url)
+                self.assertEqual(request.get_header("Authorization"), "Bearer secret")
+                self.assertTrue(body["stream"])
+                self.assertEqual(body["tools"], tools)
+
+    def test_litellm_remains_an_optional_gateway_provider(self):
+        definition = PROVIDERS["litellm"]
+        self.assertEqual(definition.name, "LiteLLM Gateway")
+        self.assertEqual(definition.base_url, "http://127.0.0.1:4000")
+        self.assertEqual(definition.environment_variable, "LITELLM_API_KEY")
+        self.assertEqual(
+            definition.base_url_environment_variable, "LITELLM_BASE_URL"
+        )
+
+    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    def test_local_gateway_http_urls_are_allowed(self):
+        self.assertEqual(
+            OpenAICompatibleClient("freellmapi", "secret").base_url,
+            "http://127.0.0.1:3001/v1",
+        )
+        self.assertEqual(
+            OpenAICompatibleClient("litellm", "secret").base_url,
+            "http://127.0.0.1:4000",
+        )
+        self.assertEqual(
+            OpenAICompatibleClient("ds2api", "secret").base_url,
+            "http://127.0.0.1:5001/v1",
+        )
+
+    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    def test_freellmapi_lists_only_models_ready_on_the_local_router(self):
+        payload = json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "auto",
+                        "context_length": 131072,
+                        "supported_parameters": ["tools"],
+                    },
+                    {
+                        "id": "deepseek-r1",
+                        "context_window": 65536,
+                        "supported_parameters": ["tools"],
+                    },
+                ]
+            }
+        ).encode()
+        client = OpenAICompatibleClient("freellmapi", "unified-key")
+
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+            self.assertEqual(client.list_models(), ["auto", "deepseek-r1"])
+
+        request = call.call_args.args[0]
+        self.assertEqual(
+            request.full_url,
+            "http://127.0.0.1:3001/v1/models?ready=true",
+        )
+        self.assertEqual(request.get_header("Authorization"), "Bearer unified-key")
+        self.assertEqual(client.model_metadata("auto")["context"], 131072)
+        self.assertTrue(client.model_metadata("auto")["supports_tools"])
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {
+            "FREELLMAPI_API_KEY": "dashboard-key",
+            "FREELLMAPI_BASE_URL": "https://free.example/v1/",
+        },
+        clear=True,
+    )
+    def test_freellmapi_supports_environment_configuration(self):
+        definition = PROVIDERS["freellmapi"]
+        self.assertEqual(definition.api_key_from_environment(), "dashboard-key")
+        self.assertEqual(
+            OpenAICompatibleClient("freellmapi", "dashboard-key").base_url,
+            "https://free.example/v1",
+        )
+
+    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    def test_freellmapi_stream_uses_standard_chat_and_tool_contract(self):
+        client = OpenAICompatibleClient("freellmapi", "unified-key", "auto:coding")
+        tools = [{"type": "function", "function": {"name": "inspect_workspace"}}]
+
+        with patch(
+            "main.api_providers.urlopen",
+            return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
+        ) as call:
+            list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
+
+        request = call.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(
+            request.full_url,
+            "http://127.0.0.1:3001/v1/chat/completions",
+        )
+        self.assertEqual(body["model"], "auto:coding")
+        self.assertTrue(body["stream"])
+        self.assertEqual(body["tools"], tools)
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {"LITELLM_BASE_URL": "http://gateway.example/v1"},
+        clear=True,
+    )
+    def test_remote_gateway_http_url_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Invalid LiteLLM Gateway"):
+            OpenAICompatibleClient("litellm", "secret")
+
+    @patch.dict(
+        "main.api_providers.os.environ",
+        {"DS2API_BASE_URL": "https://deepseek.example/v1/"},
+        clear=True,
+    )
+    def test_remote_gateway_https_url_is_allowed(self):
+        self.assertEqual(
+            OpenAICompatibleClient("ds2api", "secret").base_url,
+            "https://deepseek.example/v1",
+        )
+
+    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    def test_gateway_discovery_uses_shared_openai_path_and_bearer_auth(self):
+        payload = json.dumps({"data": [{"id": "agent-model"}]}).encode()
+        client = OpenAICompatibleClient("litellm", "gateway-secret")
+        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+            self.assertEqual(client.list_models(), ["agent-model"])
+        request = call.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:4000/models")
+        self.assertEqual(request.get_header("Authorization"), "Bearer gateway-secret")
+
+    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    def test_litellm_stream_uses_standard_chat_completions_contract(self):
+        client = OpenAICompatibleClient("litellm", "gateway-secret", "claude-agent")
+        tools = [{"type": "function", "function": {"name": "inspect_workspace"}}]
+        with patch(
+            "main.api_providers.urlopen",
+            return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
+        ) as call:
+            list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
+
+        request = call.call_args.args[0]
+        body = json.loads(request.data.decode("utf-8"))
+        self.assertEqual(request.full_url, "http://127.0.0.1:4000/chat/completions")
+        self.assertEqual(body["model"], "claude-agent")
+        self.assertTrue(body["stream"])
+        self.assertEqual(body["tools"], tools)
+
     def test_qwen_cloud_uses_dashscope_openai_compatible_api(self):
         payload = json.dumps({"data": [{"id": "qwen-plus"}]}).encode()
         client = OpenAICompatibleClient("qwen", "secret")

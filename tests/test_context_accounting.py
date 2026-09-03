@@ -136,6 +136,13 @@ class ContextAccountingTests(TestCase):
         show_usage.assert_called_once()
         show_prompt_size.assert_called_once()
 
+    def test_cli_starts_in_local_llama_cpp_workflow(self):
+        cli = OpenCLI(dry_run=True)
+
+        self.assertEqual(cli.mode, "auto")
+        self.assertIsNone(cli.api_provider)
+        self.assertEqual(cli.context_accounting.profile.backend, "llama_cpp")
+
     def test_local_override_updates_engine_context_before_load(self):
         class Engine:
             MODELS = {

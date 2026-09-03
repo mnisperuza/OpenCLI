@@ -27,6 +27,7 @@ class ProviderDefinition:
     environment_variable: str
     environment_variable_aliases: tuple[str, ...] = ()
     base_url_environment_variable: str = ""
+    models_path: str = "models"
 
     def api_key_from_environment(self) -> str:
         """Read first configured provider key without persisting it."""
@@ -43,8 +44,12 @@ class ProviderDefinition:
             value = os.environ.get(self.base_url_environment_variable, value).strip()
         value = value.rstrip("/")
         parsed = urlparse(value)
+        loopback_http = (
+            parsed.scheme == "http"
+            and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+        )
         if (
-            parsed.scheme != "https"
+            (parsed.scheme != "https" and not loopback_http)
             or not parsed.hostname
             or parsed.username
             or parsed.password
@@ -62,6 +67,41 @@ PROVIDERS: Dict[str, ProviderDefinition] = {
         base_url="https://api.groq.com/openai/v1",
         key_url="https://console.groq.com/keys",
         environment_variable="GROQ_API_KEY",
+    ),
+    "openai": ProviderDefinition(
+        key="openai",
+        name="OpenAI",
+        base_url="https://api.openai.com/v1",
+        key_url="https://platform.openai.com/api-keys",
+        environment_variable="OPENAI_API_KEY",
+    ),
+    "cerebras": ProviderDefinition(
+        key="cerebras",
+        name="Cerebras",
+        base_url="https://api.cerebras.ai/v1",
+        key_url="https://cloud.cerebras.ai/platform/api-keys",
+        environment_variable="CEREBRAS_API_KEY",
+    ),
+    "deepseek": ProviderDefinition(
+        key="deepseek",
+        name="DeepSeek",
+        base_url="https://api.deepseek.com",
+        key_url="https://platform.deepseek.com/api_keys",
+        environment_variable="DEEPSEEK_API_KEY",
+    ),
+    "xai": ProviderDefinition(
+        key="xai",
+        name="xAI",
+        base_url="https://api.x.ai/v1",
+        key_url="https://console.x.ai",
+        environment_variable="XAI_API_KEY",
+    ),
+    "nvidia": ProviderDefinition(
+        key="nvidia",
+        name="NVIDIA NIM",
+        base_url="https://integrate.api.nvidia.com/v1",
+        key_url="https://build.nvidia.com",
+        environment_variable="NVIDIA_API_KEY",
     ),
     "gemini": ProviderDefinition(
         key="gemini",
@@ -85,6 +125,52 @@ PROVIDERS: Dict[str, ProviderDefinition] = {
         environment_variable="DASHSCOPE_API_KEY",
         environment_variable_aliases=("QWEN_API_KEY",),
         base_url_environment_variable="QWEN_BASE_URL",
+    ),
+    "mistral": ProviderDefinition(
+        key="mistral",
+        name="Mistral AI",
+        base_url="https://api.mistral.ai/v1",
+        key_url="https://console.mistral.ai/api-keys",
+        environment_variable="MISTRAL_API_KEY",
+    ),
+    "fireworks": ProviderDefinition(
+        key="fireworks",
+        name="Fireworks AI",
+        base_url="https://api.fireworks.ai/inference/v1",
+        key_url="https://fireworks.ai/account/api-keys",
+        environment_variable="FIREWORKS_API_KEY",
+    ),
+    "together": ProviderDefinition(
+        key="together",
+        name="Together AI",
+        base_url="https://api.together.xyz/v1",
+        key_url="https://api.together.ai/settings/api-keys",
+        environment_variable="TOGETHER_API_KEY",
+    ),
+    "freellmapi": ProviderDefinition(
+        key="freellmapi",
+        name="FreeLLMAPI Gateway",
+        base_url="http://127.0.0.1:3001/v1",
+        key_url="http://127.0.0.1:3001",
+        environment_variable="FREELLMAPI_API_KEY",
+        base_url_environment_variable="FREELLMAPI_BASE_URL",
+        models_path="models?ready=true",
+    ),
+    "litellm": ProviderDefinition(
+        key="litellm",
+        name="LiteLLM Gateway",
+        base_url="http://127.0.0.1:4000",
+        key_url="https://docs.litellm.ai/docs/proxy/virtual_keys",
+        environment_variable="LITELLM_API_KEY",
+        base_url_environment_variable="LITELLM_BASE_URL",
+    ),
+    "ds2api": ProviderDefinition(
+        key="ds2api",
+        name="DS2API",
+        base_url="http://127.0.0.1:5001/v1",
+        key_url="https://github.com/CJackHwang/ds2api",
+        environment_variable="DS2API_API_KEY",
+        base_url_environment_variable="DS2API_BASE_URL",
     ),
 }
 
@@ -181,7 +267,7 @@ class OpenAICompatibleClient:
 
     def list_models(self) -> List[str]:
         request = Request(
-            f"{self.base_url}/models",
+            f"{self.base_url}/{self.definition.models_path}",
             headers=self._headers(),
             method="GET",
         )
