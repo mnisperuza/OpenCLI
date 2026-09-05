@@ -1,8 +1,8 @@
 # Support
 
-Use [GitHub Discussions](https://github.com/mnisperuza/OpenCLI/discussions)
+Use [GitHub Discussions](https://github.com/mnisperuza/Fenrir-Agent/discussions)
 for setup help, workflow questions, and ideas that need conversation. Use
-[GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) for reproducible
+[GitHub Issues](https://github.com/mnisperuza/Fenrir-Agent/issues) for reproducible
 bugs and scoped feature requests.
 
 Include Fenrir Agent version, operating system, Python version, selected

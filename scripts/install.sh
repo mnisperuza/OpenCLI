@@ -15,5 +15,5 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 printf '%s\n' 'Installing Fenrir Agent...'
-uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
+uv tool install --upgrade git+https://github.com/mnisperuza/Fenrir-Agent.git
 printf '%s\n' 'Fenrir Agent installed. Run: fenrir'

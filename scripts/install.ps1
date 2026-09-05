@@ -11,5 +11,5 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 Write-Host "Installing Fenrir Agent..."
-uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
+uv tool install --upgrade git+https://github.com/mnisperuza/Fenrir-Agent.git
 Write-Host "Fenrir Agent installed. Run: fenrir"

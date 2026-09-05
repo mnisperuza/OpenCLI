@@ -26,8 +26,8 @@ versioning for released versions.
 - Moved workspace state and environment-variable names from `.opencli` /
   `OPENCLI_*` to `.fenrir` / `FENRIR_*`. Existing `.opencli` state is left
   untouched; copy the data you want to retain into `.fenrir`.
-- Kept the public GitHub repository URL unchanged during the source-repository
-  migration, so existing source installers remain valid.
+- Moved the canonical GitHub repository, installer sources, and package links
+  to `mnisperuza/Fenrir-Agent`.
 
 ## 1.7.0
 

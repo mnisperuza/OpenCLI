@@ -267,7 +267,7 @@ class OpenAICompatibleClient:
         if self.provider == "openrouter":
             headers.update(
                 {
-                    "HTTP-Referer": "https://github.com/mnisperuza/OpenCLI",
+                    "HTTP-Referer": "https://github.com/mnisperuza/Fenrir-Agent",
                     "X-OpenRouter-Title": "Fenrir Agent",
                 }
             )

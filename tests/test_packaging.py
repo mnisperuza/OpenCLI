@@ -40,7 +40,7 @@ class PackagingTests(TestCase):
         self.assertEqual(project["license"], "Apache-2.0")
         self.assertEqual(project["readme"], "README.md")
         self.assertEqual(project["scripts"]["fenrir"], "fenrir_agent.cli:main")
-        self.assertIn("mnisperuza/OpenCLI", project["urls"]["Repository"])
+        self.assertIn("mnisperuza/Fenrir-Agent", project["urls"]["Repository"])
 
     def test_public_library_namespace_exposes_stable_entry_points(self):
         self.assertEqual(fenrir_agent.__version__, __version__)
@@ -72,7 +72,7 @@ class PackagingTests(TestCase):
 
         install_command = (
             "uv tool install --upgrade "
-            "git+https://github.com/mnisperuza/OpenCLI.git"
+            "git+https://github.com/mnisperuza/Fenrir-Agent.git"
         )
         self.assertIn(install_command, shell)
         self.assertIn(install_command, powershell)

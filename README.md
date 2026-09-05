@@ -4,14 +4,14 @@
 
 ### The best ideas from modern AI CLIs, unified in one trusted agent.
 
-[![CI](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml/badge.svg)](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml)
+[![CI](https://github.com/mnisperuza/Fenrir-Agent/actions/workflows/harness-gates.yml/badge.svg)](https://github.com/mnisperuza/Fenrir-Agent/actions/workflows/harness-gates.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-Apache--2.0-0A66C2?logo=apache&logoColor=white)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-4C8BF5)](#platform-setup)
 [![Local-first](https://img.shields.io/badge/Inference-Local--first-2E8B57)](#models-without-lock-in)
 [![Providers](https://img.shields.io/badge/Providers-15-7B61FF)](#direct-api-providers)
 [![Release](https://img.shields.io/badge/Release-2.0.0-0A66C2)](CHANGELOG.md)
-[![GitHub last commit](https://img.shields.io/github/last-commit/mnisperuza/OpenCLI?logo=github)](https://github.com/mnisperuza/OpenCLI/commits/main)
+[![GitHub last commit](https://img.shields.io/github/last-commit/mnisperuza/Fenrir-Agent?logo=github)](https://github.com/mnisperuza/Fenrir-Agent/commits/main)
 
 [Install](#install) · [First session](#first-session) · [Models](#models-without-lock-in) · [Safety](#designed-for-trusted-workspaces) · [Roadmap](docs/ROADMAP.md) · [Contributing](#development)
 
@@ -68,13 +68,13 @@ Fenrir Agent supports Python 3.10–3.12 on Windows, macOS, and Linux. The recom
 macOS and Linux:
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/mnisperuza/OpenCLI/main/scripts/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/mnisperuza/Fenrir-Agent/main/scripts/install.sh | sh
 ```
 
 Windows PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/mnisperuza/OpenCLI/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/mnisperuza/Fenrir-Agent/main/scripts/install.ps1 | iex
 ```
 
 Run either command again to update your installed tool. If the new command is not visible immediately, open a new terminal so its tool directory is on `PATH`.
@@ -86,7 +86,7 @@ After the first Fenrir Agent release is published, install it from PyPI with
 public source directly from GitHub:
 
 ```bash
-python -m pip install --upgrade "git+https://github.com/mnisperuza/OpenCLI.git"
+python -m pip install --upgrade "git+https://github.com/mnisperuza/Fenrir-Agent.git"
 fenrir
 ```
 
@@ -261,7 +261,7 @@ Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approve
 ## Development
 
 ```bash
-git clone https://github.com/mnisperuza/OpenCLI.git
+git clone https://github.com/mnisperuza/Fenrir-Agent.git
 cd OpenCLI
 python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
@@ -277,9 +277,9 @@ The release workflow covers Python 3.10, 3.11, and 3.12 on Ubuntu, Windows, and 
 
 Fenrir Agent is designed for trusted local development and research workflows. MCP servers, third-party plugins, background cloud agents, messaging gateways, editor integrations, desktop installers, and automatic updates are not yet presented as stable product surface.
 
-Use [GitHub Discussions](https://github.com/mnisperuza/OpenCLI/discussions) for
+Use [GitHub Discussions](https://github.com/mnisperuza/Fenrir-Agent/discussions) for
 setup and workflow help. Report reproducible defects through
-[GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) with your Fenrir
+[GitHub Issues](https://github.com/mnisperuza/Fenrir-Agent/issues) with your Fenrir
 Agent version, operating system, Python version, selected provider/model,
 command, and a redacted error. Read [SUPPORT.md](SUPPORT.md),
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md) before

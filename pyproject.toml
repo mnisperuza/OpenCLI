@@ -73,11 +73,11 @@ constrained = ["outlines>=1.2,<2"]
 fenrir = "fenrir_agent.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/mnisperuza/OpenCLI"
-Documentation = "https://github.com/mnisperuza/OpenCLI#readme"
-Repository = "https://github.com/mnisperuza/OpenCLI"
-Issues = "https://github.com/mnisperuza/OpenCLI/issues"
-Changelog = "https://github.com/mnisperuza/OpenCLI/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mnisperuza/Fenrir-Agent"
+Documentation = "https://github.com/mnisperuza/Fenrir-Agent#readme"
+Repository = "https://github.com/mnisperuza/Fenrir-Agent"
+Issues = "https://github.com/mnisperuza/Fenrir-Agent/issues"
+Changelog = "https://github.com/mnisperuza/Fenrir-Agent/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
