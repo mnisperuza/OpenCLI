@@ -10,6 +10,7 @@ from urllib.request import Request
 from fenrir_agent.agent_runtime import PydanticAgentRuntime, RuntimeConfig
 from fenrir_agent.api_profiles import ApiProfileRegistry
 from fenrir_agent.api_providers import (
+    ApiProviderError,
     OpenAICompatibleClient,
     PROVIDERS,
     _SameOriginRedirectHandler,
@@ -440,6 +441,19 @@ class ApiProviderClientTests(unittest.TestCase):
             {"path": "a.txt", "content": "ok"},
         )
 
+    def test_gemini_stream_preserves_tool_call_extra_content(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","extra_content":{"google":{"thought_signature":"signed"}},"function":{"name":"read_text_file","arguments":"{\\"path\\":\\"a.txt\\"}"}}]}}]}\n',
+            b"data: [DONE]\n",
+        ]
+        client = OpenAICompatibleClient("gemini", "secret", "gemini-3.8-flash")
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=lines)):
+            events = list(client.stream_chat([], []))
+        self.assertEqual(
+            events[0]["calls"][0]["extra_content"],
+            {"google": {"thought_signature": "signed"}},
+        )
+
     def test_stream_exposes_provider_reported_usage(self):
         lines = [
             b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}\n',
@@ -522,6 +536,26 @@ class ApiProviderClientTests(unittest.TestCase):
         ]
         self.assertEqual(choices, [choice, "auto"])
         self.assertEqual(events[0]["calls"][0]["name"], "react_dispatch")
+
+    def test_groq_retries_documented_rejected_tool_json_at_low_temperature(self):
+        client = OpenAICompatibleClient("groq", "secret", "model")
+        tools = [{"type": "function", "function": {"name": "read_text_file"}}]
+        rejected = HTTPError(
+            "https://api.groq.com/openai/v1/chat/completions",
+            400,
+            "invalid tool JSON",
+            {},
+            BytesIO(b'{"error":{"failed_generation":{"reason":"Tool call arguments are not valid JSON"}}}'),
+        )
+        accepted = FakeResponse(lines=[b"data: [DONE]\n"])
+        with patch(
+            "fenrir_agent.api_providers.safe_urlopen", side_effect=[rejected, accepted]
+        ) as call:
+            self.assertEqual(list(client.stream_chat([], tools)), [])
+
+        bodies = [json.loads(item.args[0].data.decode("utf-8")) for item in call.call_args_list]
+        self.assertNotIn("temperature", bodies[0])
+        self.assertEqual(bodies[1]["temperature"], 0.2)
 
     def test_stream_stops_at_hard_character_limit(self):
         lines = [
@@ -665,6 +699,117 @@ class ProseOnlyRemoteEngine:
 
 
 class RemoteAgentIntegrationTests(unittest.TestCase):
+    def test_gemini_tool_signature_is_replayed_with_tool_result(self):
+        class GeminiSignatureClient:
+            provider = "gemini"
+            provider_name = "Gemini"
+            model = "gemini-3.8-flash"
+
+            def __init__(self):
+                self.requests = []
+
+            def stream_chat(self, messages, tools, tool_choice="auto"):
+                self.requests.append((messages, tools, tool_choice))
+                if len(self.requests) == 1:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [{
+                            "id": "gemini-read-1",
+                            "name": "read_text_file",
+                            "arguments": json.dumps({"path": "note.txt"}),
+                            "extra_content": {
+                                "google": {"thought_signature": "provider-signed"}
+                            },
+                        }],
+                    }
+                else:
+                    yield {"type": "token", "content": "Read the file."}
+
+        class GeminiSignatureEngine:
+            backend = "remote_api"
+            current_mode = "api"
+
+            def __init__(self):
+                self.api_client = GeminiSignatureClient()
+                self.MODELS = {"api": {"path": self.api_client.model}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "note.txt").write_text("hello", encoding="utf-8")
+            engine = GeminiSignatureEngine()
+            runtime = PydanticAgentRuntime(
+                engine,
+                workspace=workspace,
+                config=RuntimeConfig(persist_state=False),
+                permission_callback=lambda *_args: True,
+            )
+            list(runtime.generate_stream("Read note.txt"))
+
+        replayed = engine.api_client.requests[1][0]
+        assistant = next(item for item in replayed if item.get("role") == "assistant")
+        self.assertEqual(
+            assistant["tool_calls"][0]["extra_content"],
+            {"google": {"thought_signature": "provider-signed"}},
+        )
+        self.assertNotIn("content", assistant)
+        tool_result = next(item for item in replayed if item.get("role") == "tool")
+        self.assertEqual(tool_result["name"], "read_text_file")
+
+    def test_gemini_tool_protocol_error_retries_with_native_guidance(self):
+        class RecoveringGeminiClient:
+            provider = "gemini"
+            provider_name = "Gemini"
+            model = "gemini-3.8-flash"
+
+            def __init__(self):
+                self.requests = []
+
+            def stream_chat(self, messages, tools, tool_choice="auto"):
+                self.requests.append((messages, tools, tool_choice))
+                if len(self.requests) == 1:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [{
+                            "id": "gemini-read-1",
+                            "name": "read_text_file",
+                            "arguments": json.dumps({"path": "note.txt"}),
+                            "extra_content": {
+                                "google": {"thought_signature": "provider-signed"}
+                            },
+                        }],
+                    }
+                elif len(self.requests) == 2:
+                    raise ApiProviderError(
+                        "Gemini API returned HTTP 400: function_response.name missing"
+                    )
+                else:
+                    yield {"type": "token", "content": "Recovered after retry."}
+
+        class RecoveringGeminiEngine:
+            backend = "remote_api"
+            current_mode = "api"
+
+            def __init__(self):
+                self.api_client = RecoveringGeminiClient()
+                self.MODELS = {"api": {"path": self.api_client.model}}
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "note.txt").write_text("hello", encoding="utf-8")
+            engine = RecoveringGeminiEngine()
+            runtime = PydanticAgentRuntime(
+                engine,
+                workspace=workspace,
+                config=RuntimeConfig(persist_state=False),
+                permission_callback=lambda *_args: True,
+            )
+            list(runtime.generate_stream("Read note.txt"))
+
+        self.assertEqual(len(engine.api_client.requests), 3)
+        repair = engine.api_client.requests[2][0][-1]["content"]
+        self.assertIn("native function tools", repair)
+        self.assertNotIn("<tool_call>", repair)
+
     def test_native_api_tool_call_executes_workspace_write(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
@@ -682,6 +827,13 @@ class RemoteAgentIntegrationTests(unittest.TestCase):
                 "made by tool",
             )
             self.assertGreaterEqual(len(engine.api_client.requests), 2)
+            standard_tool_result = next(
+                item
+                for request, _tools, _choice in engine.api_client.requests
+                for item in request
+                if item.get("role") == "tool"
+            )
+            self.assertNotIn("name", standard_tool_result)
             names = {
                 tool["function"]["name"]
                 for tool in engine.api_client.requests[0][1]

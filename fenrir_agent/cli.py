@@ -376,13 +376,13 @@ class Colors:
     CYAN = "\033[38;2;215;215;215m"
     WHITE = "\033[97m"
 
-    # Dark Sage palette
-    SAGE = "\033[38;2;190;190;190m"
-    SAGE_LIGHT = "\033[38;2;215;215;215m"
-    SAGE_DARK = "\033[38;2;120;120;120m"
-    SAGE_DIM = "\033[38;2;150;150;150m"
-    ASSISTANT = "\033[38;2;155;155;155m"
-    PALE_GREEN = "\033[38;2;174;205;181m"
+    # Obsidian Field palette: moss is accent, never status-only meaning.
+    SAGE = "\033[38;2;80;104;84m"
+    SAGE_LIGHT = "\033[38;2;167;176;151m"
+    SAGE_DARK = "\033[38;2;85;89;85m"
+    SAGE_DIM = "\033[38;2;158;163;155m"
+    ASSISTANT = "\033[38;2;217;220;210m"
+    PALE_GREEN = "\033[38;2;167;176;151m"
 
     @staticmethod
     def rgb(r, g, b):
@@ -416,16 +416,16 @@ GRADIENTS = {
 }
 
 # Primary colors for each family
-FAMILY_COLORS = {"auto": (215, 215, 215), "qwen": (215, 215, 215)}
+FAMILY_COLORS = {"auto": (80, 104, 84), "qwen": (80, 104, 84)}
 
 # Input palette
 def get_input_bar_colors() -> dict:
     """Single neutral palette. Fenrir Agent never changes terminal colors."""
     return {
-        "border": (105, 105, 105),
-        "text": (215, 215, 215),
-        "placeholder": (125, 125, 125),
-        "cursor": (215, 215, 215),
+        "border": (80, 104, 84),
+        "text": (217, 220, 210),
+        "placeholder": (158, 163, 155),
+        "cursor": (167, 176, 151),
     }
 
 
@@ -637,6 +637,7 @@ class FenrirAgent:
         self.enabled_toolsets = DEFAULT_TOOLSETS
         self.auto_tool_routing = False
         self.react_enabled = True
+        self.react_trace_enabled = False
         self.harness_mode = harness_mode if harness_mode in {"legacy", "v2"} else "v2"
         self.web_search_mode = "fast"
         self._placeholder_index = 0
@@ -668,6 +669,7 @@ class FenrirAgent:
         self.sandbox_enabled = False
         self.sandbox = SandboxManager(self.workspace_context.root)
         self.session_memory = SessionMemoryStore(self.workspace_context.root)
+        self.session_memory.prune_inactive(max_age_days=5)
         self.skill_registry = SkillRegistry(self.workspace_context.root)
         self.pending_skill_name = ""
         self.verification = VerificationManager(self.workspace_context.root)
@@ -717,7 +719,7 @@ class FenrirAgent:
             from fenrir_agent.agent_runtime import RuntimeConfig, get_agent_runtime
 
             if self.chat_session is None:
-                self.chat_session = self.session_memory.create()
+                return False
             if (
                 self.task_plan_store is None
                 or self.task_plan_store.path.name != f"{self.chat_session.session_id}.json"
@@ -758,6 +760,17 @@ class FenrirAgent:
                 f"Install project dependencies.{Colors.RESET}"
             )
             return False
+
+    def start_chat_session(self) -> None:
+        """Create durable chat state only when the user sends a real message."""
+        if self.chat_session is not None:
+            return
+        self.session_memory.prune_inactive(max_age_days=5)
+        self.chat_session = self.session_memory.create()
+        self.task_plan_store = TaskPlanStore(
+            self.workspace_context.root, self.chat_session.session_id
+        )
+        self.task_plan_context = ""
 
     def _execute_delegate(
         self, task: str, snapshot: Path, cancel_event: threading.Event
@@ -1020,13 +1033,11 @@ class FenrirAgent:
     def _new_chat_session(self) -> None:
         self._save_chat_session()
         self.agent_runtime = None
-        self.chat_session = self.session_memory.create()
-        self.task_plan_store = TaskPlanStore(
-            self.workspace_context.root, self.chat_session.session_id
-        )
+        self.chat_session = None
+        self.task_plan_store = None
         self.task_plan_context = ""
         self.context_accounting.reset_usage()
-        print(f"New chat: {self.chat_session.path.name}")
+        print("New chat ready. A session will be created with your first message.")
 
     def working_directory_state(self) -> dict[str, object]:
         """Return session-local safe navigation state for either UI."""
@@ -1081,7 +1092,7 @@ class FenrirAgent:
 
     def rename_chat_session(self, title: str) -> str:
         if self.chat_session is None:
-            self.chat_session = self.session_memory.create()
+            raise ValueError("Send a message before naming this chat.")
         return self.session_memory.set_title(
             self.chat_session, title, self._session_transcript()
         )
@@ -1146,7 +1157,8 @@ class FenrirAgent:
 
     def _remember(self, note: str) -> None:
         if self.chat_session is None:
-            self.chat_session = self.session_memory.create()
+            print("Send a message before saving a durable note.")
+            return
         transcript = (
             self.agent_runtime.export_transcript()
             if self.agent_runtime is not None
@@ -2021,7 +2033,7 @@ class FenrirAgent:
                     print(f"{Colors.DIM}Dry-run command: {cmd}{Colors.RESET}")
                     return True
                 if not self.sandbox_enabled:
-                    print(f"{Colors.YELLOW}Host shell is disabled. Select sandbox first: /sandbox docker or /sandbox e2b connect ID{Colors.RESET}")
+                    print(f"{Colors.YELLOW}Host shell is disabled. Enable the default boundary with /sandbox on, or select Docker/E2B explicitly.{Colors.RESET}")
                     return True
                 try:
                     argv = shlex.split(cmd, posix=True)
@@ -2031,22 +2043,26 @@ class FenrirAgent:
                 if not argv:
                     print(f"{Colors.YELLOW}Usage: !<argv command> (e.g., !pytest -q){Colors.RESET}")
                     return True
-                if not self.permission_manager.request(
-                    "command",
-                    "run_sandboxed_command",
-                    " ".join(argv),
-                    "Run user command in active isolated sandbox",
-                ):
-                    print(f"{Colors.YELLOW}Command permission denied.{Colors.RESET}")
-                    return True
-                if write_access and not self.permission_manager.request(
-                    "file_write",
-                    "run_sandboxed_command",
-                    " ".join(argv),
-                    "Allow sandbox command to modify project files",
-                ):
-                    print(f"{Colors.YELLOW}Sandbox write permission denied.{Colors.RESET}")
-                    return True
+                # A user-entered command is itself authorization. Codex enforces
+                # read-only/workspace-write boundaries at the OS level. Keep the
+                # older permission prompts for remote or snapshot backends.
+                if self.sandbox.backend != "codex":
+                    if not self.permission_manager.request(
+                        "command",
+                        "run_sandboxed_command",
+                        " ".join(argv),
+                        "Run user command in active isolated sandbox",
+                    ):
+                        print(f"{Colors.YELLOW}Command permission denied.{Colors.RESET}")
+                        return True
+                    if write_access and not self.permission_manager.request(
+                        "file_write",
+                        "run_sandboxed_command",
+                        " ".join(argv),
+                        "Allow sandbox command to modify project files",
+                    ):
+                        print(f"{Colors.YELLOW}Sandbox write permission denied.{Colors.RESET}")
+                        return True
                 result = self.sandbox.run(
                     argv,
                     write_access=write_access,
@@ -2174,7 +2190,8 @@ class FenrirAgent:
 
         if lower == "/plan" or lower.startswith("/plan "):
             if self.chat_session is None:
-                self.chat_session = self.session_memory.create()
+                print("Send a message before creating a task plan.")
+                return True
             items = self._refresh_task_plan_context()
             _, _, value = user_input.strip().partition(" ")
             action, _, argument = value.partition(" ")
@@ -2217,7 +2234,21 @@ class FenrirAgent:
             action = parts[1].casefold() if len(parts) > 1 else "status"
             changed_backend = False
             try:
-                if action in {"on", "docker"}:
+                if action in {"on", "codex", "native"}:
+                    result = self.sandbox.use_default()
+                    if result.get("error"):
+                        print(
+                            f"Codex sandbox unavailable: {result['error']} "
+                            "Install/update Codex CLI or choose /sandbox docker."
+                        )
+                    else:
+                        self.sandbox_enabled = True
+                        changed_backend = True
+                        print(
+                            "Codex native sandbox ready (network off; "
+                            "! is read-only, !! allows workspace writes)."
+                        )
+                elif action == "docker":
                     image = parts[2] if len(parts) > 2 else None
                     result = self.sandbox.use_docker(image)
                     if result.get("error"):
@@ -2302,7 +2333,7 @@ class FenrirAgent:
                 elif action == "status":
                     print(json.dumps(self.sandbox.status(), indent=2, default=str))
                 else:
-                    print("Usage: /sandbox docker [IMAGE] | e2b connect ID | e2b create [TEMPLATE] [--network] | push | pull | status | stop | off")
+                    print("Usage: /sandbox on|codex | docker [IMAGE] | e2b connect ID | e2b create [TEMPLATE] [--network] | push | pull | status | stop | off")
             except (OSError, RuntimeError, ValueError) as error:
                 print(f"Sandbox error: {error}")
             if changed_backend:
@@ -2325,6 +2356,15 @@ class FenrirAgent:
                 else "ordinary agent with quiet loop safeguards"
             )
             print(f"ReAct {'enabled' if self.react_enabled else 'disabled'}: {mode}.")
+            return True
+
+        if lower in {"/react-trace", "/react-trace status"}:
+            print(f"ReAct trace: {'on' if self.react_trace_enabled else 'off'}.")
+            return True
+
+        if lower in {"/react-trace on", "/react-trace off"}:
+            self.react_trace_enabled = lower.endswith(" on")
+            print(f"ReAct trace {'enabled' if self.react_trace_enabled else 'hidden'}.")
             return True
 
         if lower in {"/agent", "/agent status"}:
@@ -3052,10 +3092,12 @@ class FenrirAgent:
     /web on|off|always|ask {Colors.DIM}Set web access and permission policy{Colors.RESET}
     /plan          {Colors.DIM}Show persistent task plan; /plan add|set|clear{Colors.RESET}
     /react on|off  {Colors.DIM}Toggle host-managed ReAct harness; /react shows state{Colors.RESET}
-    /sandbox docker [IMAGE] {Colors.DIM}Use ephemeral local Docker backend{Colors.RESET}
+    /react-trace on|off {Colors.DIM}Show or hide detailed ReAct steps (hidden by default){Colors.RESET}
+    /sandbox on|codex {Colors.DIM}Enable default Codex native sandbox (off at startup){Colors.RESET}
+    /sandbox docker [IMAGE] {Colors.DIM}Use optional ephemeral Docker backend{Colors.RESET}
     /sandbox e2b connect ID {Colors.DIM}Use user-owned E2B sandbox{Colors.RESET}
     /sandbox e2b create [TEMPLATE] [--network] {Colors.DIM}Create E2B sandbox{Colors.RESET}
-    /sandbox push|pull|status|stop|off {Colors.DIM}Control explicit E2B sync/lifecycle{Colors.RESET}
+    /sandbox push|pull|status|stop|off {Colors.DIM}Inspect or control sandbox lifecycle{Colors.RESET}
     !command / !!command {Colors.DIM}Read-only / writable sandbox command{Colors.RESET}
     /permissions   {Colors.DIM}Show workspace permissions{Colors.RESET}
     /clear         {Colors.DIM}Clear screen{Colors.RESET}
@@ -3317,6 +3359,8 @@ class FenrirAgent:
                 "llama.cpp server is stopped. Use /model auto to restart it.",
             )
             return
+        if user_input.strip().casefold() != "/retry":
+            self.start_chat_session()
         if not self.ensure_engine():
             yield AgentEvent("error", "Model engine is unavailable.")
             return
@@ -3453,6 +3497,7 @@ class FenrirAgent:
         turns_before = self.context_accounting.usage.turns
         renderer = StreamingMarkdownRenderer(self.console)
         response_started = False
+        react_summary_emitted = False
         escape_watcher = EscapeInterruptWatcher(self._interrupt_from_escape)
         escape_watcher.start()
         try:
@@ -3463,12 +3508,29 @@ class FenrirAgent:
                         sys.stdout.write(f"{Colors.ASSISTANT}Fenrir Agent: {Colors.RESET}")
                     renderer.append(event.content)
                 elif event.type == "status":
+                    if (
+                        not self.react_trace_enabled
+                        and event.content.startswith("ReAct step ")
+                    ):
+                        continue
                     print(f"\n{Colors.DIM}{event.content}{Colors.RESET}")
                 elif event.type == "react_state":
-                    print(
-                        f"\n{Colors.DIM}ReAct: "
-                        f"{event.summary or event.content}{Colors.RESET}"
-                    )
+                    details = dict(event.details)
+                    if self.react_trace_enabled:
+                        print(
+                            f"\n{Colors.DIM}ReAct: "
+                            f"{event.summary or event.content}{Colors.RESET}"
+                        )
+                    elif (
+                        not react_summary_emitted
+                        and str(details.get("phase", event.content)) == "finish"
+                        and int(details.get("steps", 0)) > 0
+                    ):
+                        react_summary_emitted = True
+                        print(
+                            f"\n{Colors.DIM}Completed: "
+                            f"{int(details['steps'])} internal steps{Colors.RESET}"
+                        )
                 elif event.type == "tool":
                     target = (
                         event.arguments.get("query")

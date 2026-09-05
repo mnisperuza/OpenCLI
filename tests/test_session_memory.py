@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
@@ -157,3 +158,24 @@ class SessionMemoryStoreTests(TestCase):
             restored = store.load_record(record.path)
 
         self.assertEqual(restored.current_directory, "src/auth")
+
+    def test_prune_inactive_removes_only_expired_closed_archives(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            store = SessionMemoryStore(workspace, root=root / "sessions")
+            now = datetime(2026, 9, 5, 12, tzinfo=timezone.utc)
+            stale = store.create(now - timedelta(days=7))
+            active = store.create(now - timedelta(days=7))
+            fresh = store.create(now - timedelta(days=2))
+            for record in (stale, active, fresh):
+                timestamp = record.created_at.timestamp()
+                os.utime(record.path, (timestamp, timestamp))
+
+            removed = store.prune_inactive(active_path=active.path, now=now)
+
+            self.assertEqual(removed, [stale.path])
+            self.assertFalse(stale.path.exists())
+            self.assertTrue(active.path.exists())
+            self.assertTrue(fresh.path.exists())

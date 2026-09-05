@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fenrir-agent"
 dynamic = ["version"]
-description = "Fenrir Agent - private local and API AI agent for terminal workflows"
+description = "Fenrir Agent - modern AI CLI capabilities, unified in one trusted agent"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

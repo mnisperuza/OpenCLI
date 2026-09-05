@@ -7,7 +7,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -128,6 +128,43 @@ class SessionMemoryStore:
         if not self.directory.is_dir():
             return []
         return sorted(self.directory.glob("*.md"), key=lambda path: path.stat().st_mtime, reverse=True)
+
+    def prune_inactive(
+        self,
+        *,
+        active_path: Path | None = None,
+        max_age_days: int = 5,
+        now: datetime | None = None,
+    ) -> List[Path]:
+        """Delete closed workspace archives whose last update is past retention.
+
+        The active archive is always excluded, even if a caller supplies an
+        artificial clock in a test. Only direct Markdown session files inside
+        this workspace's session directory are eligible.
+        """
+        if max_age_days < 1 or not self.directory.is_dir():
+            return []
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        cutoff = current - timedelta(days=max_age_days)
+        active = active_path.resolve() if active_path is not None else None
+        removed: List[Path] = []
+        for path in self.directory.glob("*.md"):
+            try:
+                if path.is_symlink():
+                    continue
+                resolved = self._validate_archive(path)
+                if active is not None and resolved == active:
+                    continue
+                modified = datetime.fromtimestamp(
+                    resolved.stat().st_mtime, tz=timezone.utc
+                )
+                if modified > cutoff:
+                    continue
+                resolved.unlink()
+                removed.append(resolved)
+            except OSError:
+                continue
+        return removed
 
     def load(self, path: Path) -> str:
         resolved = self._validate_archive(path)

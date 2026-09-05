@@ -42,10 +42,11 @@ contract tests rather than a misleading generic OpenAI-compatible entry.
 
 ## Local sandbox
 
-After release foundation and provider target, Fenrir Agent will add a local sandbox
-backend with read-only and workspace-write modes, network disabled by default,
-resource limits, process-tree cancellation, and clear platform-specific
-guarantees. Docker and E2B remain optional backends.
+Fenrir Agent now uses the installed Codex CLI as its default local sandbox
+backend, with read-only and workspace-write profiles and network disabled.
+Sandboxing remains opt-in at runtime. Docker and E2B remain optional backends.
+Native helper packaging, explicit network escalation, and stronger process-tree
+cancellation remain follow-up hardening work.
 
 ## Later product layers
 

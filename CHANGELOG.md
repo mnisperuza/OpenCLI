@@ -5,6 +5,21 @@ versioning for released versions.
 
 ## 2.0.0
 
+- Reworked deep web research into a bounded multi-angle pass over core facts,
+  primary sources, independent evidence, and limitations. Evidence packets now
+  report coverage and unresolved research angles alongside citation-ready
+  excerpts.
+- Made the session's `/search deep` setting apply to explicit automatic web
+  grounding, while preserving the compact fast-search workflow.
+- Hardened Gemini native tool continuations and malformed tool-call recovery
+  without changing the wire format used by other API providers.
+- Added Codex's native OS sandbox as Fenrir's default sandbox backend while
+  keeping sandbox activation off at startup.
+- Added `/sandbox on` and `/sandbox codex`; retained Docker and E2B as explicit
+  alternatives with no host-shell fallback.
+- Added built-in read-only/workspace-write profiles, network-off reporting,
+  elevated-to-unelevated Windows setup fallback, sanitized command
+  environments, and workspace-relative cwd validation.
 - Renamed the product from OpenCLI to **Fenrir Agent**.
 - Renamed the install distribution to `fenrir-agent`, the Python package to
   `fenrir_agent`, and the terminal command to `fenrir`.

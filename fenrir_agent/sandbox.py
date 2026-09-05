@@ -1,4 +1,4 @@
-"""Isolated command backends for Docker and user-controlled E2B sandboxes."""
+"""Isolated command backends for Codex, Docker, and user-controlled E2B."""
 
 from __future__ import annotations
 
@@ -36,6 +36,270 @@ class SandboxConfig:
         "**/__pycache__/**", ".venv", ".venv/**", "node_modules",
         "node_modules/**",
     )
+
+
+class CodexSandbox:
+    """Run commands through Codex's native, platform-enforced sandbox.
+
+    Fenrir owns activation and approval UX. The installed Codex CLI owns the
+    operating-system boundary. Commands never fall back to the host process.
+    """
+
+    backend = "codex"
+
+    def __init__(
+        self,
+        workspace: Path,
+        config: SandboxConfig | None = None,
+        executable: Path | None = None,
+    ):
+        self.workspace = workspace.resolve()
+        self.config = config or SandboxConfig()
+        self.executable = executable or self.discover_executable()
+        self._probe_error = ""
+        self._available: bool | None = None
+        self._setup_error = ""
+        self.windows_mode: str | None = None
+
+    @staticmethod
+    def discover_executable() -> Path | None:
+        """Find a native Codex binary without invoking a Windows script shim."""
+        override = os.environ.get("FENRIR_CODEX_SANDBOX_BIN", "").strip()
+        if override:
+            candidate = Path(override).expanduser()
+            if candidate.is_absolute() and candidate.is_file() and (
+                os.name != "nt" or candidate.suffix.casefold() == ".exe"
+            ):
+                return candidate.resolve()
+            return None
+
+        direct = shutil.which("codex.exe" if os.name == "nt" else "codex")
+        if direct:
+            candidate = Path(direct)
+            if os.name != "nt" or candidate.suffix.casefold() == ".exe":
+                return candidate.resolve()
+
+        # npm installs a cmd/PowerShell shim beside the native package binary.
+        # Calling the shim with untrusted argv would involve shell parsing, so
+        # locate its native executable instead.
+        if os.name == "nt":
+            shim = shutil.which("codex.cmd") or shutil.which("codex")
+            if shim:
+                package_root = (
+                    Path(shim).resolve().parent / "node_modules" / "@openai"
+                    / "codex" / "node_modules" / "@openai"
+                )
+                matches = sorted(
+                    package_root.glob("codex-win32-*/vendor/*/bin/codex.exe")
+                )
+                if matches:
+                    return matches[0].resolve()
+        return None
+
+    @staticmethod
+    def _safe_environment() -> Dict[str, str]:
+        """Retain OS/tool discovery variables while excluding credential-like env."""
+        allowed = {
+            "ALLUSERSPROFILE", "APPDATA", "COMSPEC", "HOMEDRIVE", "HOMEPATH",
+            "HOME", "LANG", "LOCALAPPDATA", "NUMBER_OF_PROCESSORS", "OS", "PATH",
+            "PATHEXT", "PROCESSOR_ARCHITECTURE", "PROGRAMDATA", "PROGRAMFILES",
+            "PROGRAMFILES(X86)", "PROGRAMW6432", "PSMODULEPATH", "SYSTEMDRIVE",
+            "SYSTEMROOT", "TEMP", "TMP", "USERDOMAIN", "USERNAME", "USERPROFILE",
+            "WINDIR",
+        }
+        return {
+            key: value for key, value in os.environ.items()
+            if key.upper() in allowed
+        }
+
+    def is_available(self) -> bool:
+        if self._available is not None:
+            return self._available
+        if self.executable is None or not self.executable.is_file():
+            self._probe_error = "Codex CLI native executable was not found."
+            self._available = False
+            return False
+        try:
+            completed = subprocess.run(
+                [str(self.executable), "sandbox", "--help"],
+                shell=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._safe_environment(),
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            self._probe_error = str(error)
+            self._available = False
+            return False
+        if completed.returncode != 0:
+            self._probe_error = (completed.stderr or completed.stdout).strip()[-500:]
+            self._available = False
+            return False
+        help_text = (completed.stdout or "") + (completed.stderr or "")
+        if "--permission-profile" not in help_text:
+            self._probe_error = (
+                "Installed Codex CLI is too old for permission profiles; update it."
+            )
+            self._available = False
+            return False
+        self._probe_error = ""
+        self._available = True
+        return True
+
+    def status(self) -> Dict[str, Any]:
+        available = self.is_available() and not self._setup_error
+        return {
+            "backend": self.backend,
+            "available": available,
+            "isolation": "Codex native OS sandbox",
+            "workspace": str(self.workspace),
+            "writes": "direct when workspace-write is requested",
+            "network": "disabled",
+            "profiles": ["fenrir-read-only", "fenrir-workspace"],
+            "windows_mode": self.windows_mode,
+            "executable": str(self.executable) if self.executable else None,
+            "error": self._setup_error or self._probe_error or None,
+        }
+
+    @staticmethod
+    def _profile_options(write_access: bool) -> tuple[str, list[str]]:
+        base_profile = ":workspace" if write_access else ":read-only"
+        profile = "fenrir-workspace" if write_access else "fenrir-read-only"
+        return profile, [
+            "--config", f'permissions.{profile}.extends="{base_profile}"',
+            "--config", f"permissions.{profile}.network.enabled=false",
+            "--permission-profile", profile,
+        ]
+
+    def prepare(self) -> Dict[str, Any]:
+        """Validate native enforcement, preferring elevated Windows isolation."""
+        if not self.is_available():
+            return self.status()
+        if os.name != "nt":
+            return self.status()
+
+        _profile, options = self._profile_options(False)
+        failures: list[str] = []
+        assert self.executable is not None
+        for mode in ("elevated", "unelevated"):
+            invocation = [
+                str(self.executable), "sandbox",
+                "--config", f'windows.sandbox="{mode}"',
+                *options,
+                "--cd", str(self.workspace),
+                "--", "cmd.exe", "/d", "/c", "exit", "0",
+            ]
+            try:
+                completed = subprocess.run(
+                    invocation, shell=False, capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                    env=self._safe_environment(), timeout=30, check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                failures.append(f"{mode}: {error}")
+                continue
+            if completed.returncode == 0:
+                self.windows_mode = mode
+                self._setup_error = ""
+                return self.status()
+            detail = (completed.stderr or completed.stdout).strip()[-300:]
+            failures.append(f"{mode}: {detail or 'setup failed'}")
+
+        self._setup_error = "Windows sandbox setup failed; " + " | ".join(failures)
+        return self.status()
+
+    def _resolve_cwd(self, cwd: str) -> Path:
+        logical = Path(str(cwd))
+        if logical.is_absolute() or ".." in logical.parts:
+            raise ValueError("Sandbox cwd must stay inside the workspace")
+        resolved = (self.workspace / logical).resolve()
+        try:
+            resolved.relative_to(self.workspace)
+        except ValueError as error:
+            raise ValueError("Sandbox cwd must stay inside the workspace") from error
+        if not resolved.is_dir():
+            raise ValueError("Sandbox cwd must be an existing workspace directory")
+        return resolved
+
+    def run(
+        self, command: Sequence[str], *, write_access: bool = False,
+        timeout_seconds: int | None = None, cwd: str = ".",
+    ) -> Dict[str, Any]:
+        argv = [str(part) for part in command]
+        if not argv or not argv[0].strip():
+            raise ValueError("Command must contain an executable")
+        if not self.is_available() or self._setup_error:
+            return {
+                "error": (
+                    self._setup_error or self._probe_error
+                    or "Codex sandbox is unavailable."
+                ),
+                "backend": self.backend,
+            }
+        working_directory = self._resolve_cwd(cwd)
+        profile, options = self._profile_options(write_access)
+        invocation = [
+            str(self.executable),
+            "sandbox",
+            *(
+                ["--config", f'windows.sandbox="{self.windows_mode or "elevated"}"']
+                if os.name == "nt" else []
+            ),
+            *options,
+            "--cd", str(working_directory),
+            "--",
+            *argv,
+        ]
+        try:
+            completed = subprocess.run(
+                invocation,
+                shell=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=self._safe_environment(),
+                timeout=timeout_seconds or self.config.timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            stdout = (
+                error.stdout.decode(errors="replace")
+                if isinstance(error.stdout, bytes) else (error.stdout or "")
+            )
+            stderr = (
+                error.stderr.decode(errors="replace")
+                if isinstance(error.stderr, bytes) else (error.stderr or "")
+            )
+            return {
+                "error": "Sandbox command timed out.", "backend": self.backend,
+                "output": (stdout + stderr)[-self.config.max_output_chars :],
+                "profile": profile,
+            }
+        except OSError as error:
+            return {
+                "error": f"Codex sandbox command failed to start: {error}",
+                "backend": self.backend,
+            }
+        output = (completed.stdout or "") + (completed.stderr or "")
+        truncated = len(output) > self.config.max_output_chars
+        if truncated:
+            output = output[-self.config.max_output_chars :]
+        return {
+            "backend": self.backend,
+            "exit_code": completed.returncode,
+            "output": output,
+            "truncated": truncated,
+            "write_access": write_access,
+            "cwd": str(cwd),
+            "profile": profile,
+            "network": "disabled",
+            "changes_persisted": write_access,
+        }
 
 
 class DockerSandbox:
@@ -474,6 +738,24 @@ class SandboxManager:
         self.config = config or SandboxConfig()
         self.active: Optional[SandboxBackend] = None
 
+    def use_codex(self) -> Dict[str, Any]:
+        """Select Fenrir's default sandbox backend without enabling it at startup."""
+        backend = CodexSandbox(self.workspace, self.config)
+        status = backend.prepare()
+        if not status.get("available"):
+            return {
+                **status,
+                "error": status.get("error") or (
+                    "Codex sandbox unavailable. Install the Codex CLI first."
+                ),
+            }
+        self.active = backend
+        self.backend = backend.backend
+        return status
+
+    def use_default(self) -> Dict[str, Any]:
+        return self.use_codex()
+
     def use_docker(self, image: str | None = None) -> Dict[str, Any]:
         config = replace(self.config, image=image.strip()) if image else self.config
         if any(char.isspace() for char in config.image):
@@ -511,16 +793,27 @@ class SandboxManager:
             stopped = self.active.kill()
             self.disable()
             return {"backend": "e2b", "stopped": stopped}
+        backend = self.backend
         self.disable()
-        return {"backend": "docker", "stopped": True, "note": "Docker commands are ephemeral"}
+        note = "Docker commands are ephemeral" if backend == "docker" else "Sandbox detached"
+        return {"backend": backend, "stopped": True, "note": note}
 
     def is_available(self) -> bool:
         return self.active is not None and self.active.is_available()
 
     def status(self) -> Dict[str, Any]:
         if self.active is None:
+            codex = CodexSandbox(self.workspace, self.config)
+            codex_found = codex.executable is not None
             return {
                 "backend": "none", "available": False,
+                "enabled": False,
+                "default_backend": "codex",
+                "codex_installed": codex_found,
+                "codex_error": (
+                    None if codex_found
+                    else "Codex CLI native executable was not found."
+                ),
                 "docker_installed": shutil.which("docker") is not None,
                 "e2b_sdk_available": E2BSandbox.sdk_available(),
             }
@@ -549,6 +842,6 @@ class SandboxManager:
 
 
 __all__ = [
-    "DockerSandbox", "E2BSandbox", "SandboxBackend", "SandboxConfig",
+    "CodexSandbox", "DockerSandbox", "E2BSandbox", "SandboxBackend", "SandboxConfig",
     "SandboxManager",
 ]

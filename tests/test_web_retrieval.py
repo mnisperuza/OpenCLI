@@ -25,11 +25,13 @@ class FakeDDGS:
         self.extracted = extracted or {"content": ""}
         self.error = error
         self.search_kwargs = None
+        self.search_history = []
 
     def text(self, query, **kwargs):
         if self.error:
             raise self.error
         self.search_kwargs = {"query": query, **kwargs}
+        self.search_history.append(self.search_kwargs)
         return self.results
 
     def extract(self, url, fmt="text_markdown"):
@@ -184,6 +186,22 @@ class WebRetrieverTests(TestCase):
         self.assertEqual(len(output["evidence"][0]["excerpt"]), 320)
         self.assertNotIn("x" * 1_000, output["evidence"][0]["excerpt"])
         self.assertEqual(output["limits"]["max_fetches"], 2)
+        self.assertEqual(output["coverage"]["planned_queries"], 4)
+        self.assertGreaterEqual(len(client.search_history), 4)
+        self.assertEqual(output["research_plan"][0]["id"], "core")
+
+    def test_deep_search_uses_complementary_queries_and_records_gaps(self):
+        client = FakeDDGS(
+            results=[{"title": "Source", "href": "https://example.com/source", "body": "evidence"}]
+        )
+        retriever = WebRetriever(client_factory=lambda: client, deep_max_fetches=1)
+
+        output = retriever.web_search("agent tool safety", mode="deep", source="general")
+
+        self.assertEqual(len(client.search_history), 4)
+        self.assertIn("official documentation", client.search_history[1]["query"])
+        self.assertIn("limitations risks criticism", client.search_history[3]["query"])
+        self.assertIn("unresolved_roles", output["coverage"])
 
     def test_arxiv_lane_marks_preprints(self):
         retriever = WebRetriever(client_factory=FakeDDGS)
@@ -435,6 +453,22 @@ class AgentWebToolTests(TestCase):
                 for event in events
             )
         )
+
+    def test_explicit_search_uses_session_deep_mode(self):
+        engine = DirectAnswerEngine()
+        runtime = PydanticAgentRuntime(
+            engine,
+            config=RuntimeConfig(
+                persist_state=False, auto_tool_routing=True, react_enabled=False,
+                web_search_mode="deep",
+            ),
+        )
+        client = FakeDDGS(results=[{"title": "Source", "href": "https://example.com/source", "body": "evidence"}])
+        runtime.web._client_factory = lambda: client
+
+        list(runtime.generate_stream("Search current Fenrir Agent information"))
+
+        self.assertGreaterEqual(len(client.search_history), 4)
 
     def test_local_file_search_uses_pathlib_not_web_retrieval(self):
         with TemporaryDirectory() as temporary_directory:

@@ -6,13 +6,12 @@ from concurrent.futures import Future
 from contextlib import redirect_stdout
 import io
 import json
-import os
 from pathlib import Path
 import random
 import re
 import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -114,9 +113,13 @@ class TextualPermissionBroker:
                 self._pending.discard(future)
 
     def _show(self, request: PermissionRequest, future: Future[PermissionDecision]) -> None:
+        self.app._register_permission_request(request)
+
         def resolve(decision: PermissionDecision | None) -> None:
+            resolved = decision or PermissionDecision.DENY
+            self.app._register_permission_decision(request, resolved)
             if not future.done():
-                future.set_result(decision or PermissionDecision.DENY)
+                future.set_result(resolved)
         self.app.push_screen(PermissionScreen(request), resolve)
 
     def close(self) -> None:
@@ -352,9 +355,11 @@ class FenrirAgentTui(App[None]):
     }
     .status-card { color: #8b9c9a; }
     .react-card { background: #10171a; color: #75bda8; border-left: tall #397d69; }
+    .react-summary-card { background: #0d1316; color: #657371; border-left: tall #26363a; }
     .tool-card { background: #101519; color: #9aaba9; border-left: tall #41606a; }
     .result-card { color: #78aa90; border-left: tall #365f4a; }
     .change-card { background: #0d1514; color: #8ebfaf; border-left: tall #4a8b74; }
+    .approval-card { background: #101619; color: #a7c8be; border-left: tall #477c6d; }
     .thinking-card { background: #15130f; color: #c8ae70; border-left: tall #856b36; }
     .error-card { background: #1c1013; color: #e18b96; border-left: tall #9d4654; }
     #activity { height: 1; background: #0d1215; color: #657371; padding: 0 2; }
@@ -410,10 +415,12 @@ class FenrirAgentTui(App[None]):
         self._follow_output = True
         self._events: list[AgentEvent] = []
         self._react_card: Static | None = None
+        self._react_summary_emitted = False
         self._plan_card: Static | None = None
         self._thinking_card: Collapsible | None = None
         self._thinking_body: Static | None = None
         self._thinking_text = ""
+        self._tool_targets: dict[str, list[str]] = {}
         self._activity_message = "Ready"
         self._activity_dynamic = False
         self._activity_label_index = 0
@@ -443,17 +450,8 @@ class FenrirAgentTui(App[None]):
             yield Static(id="status-line")
 
     def on_mount(self) -> None:
-        if self.cli.chat_session is None:
-            self.cli.chat_session = self.cli.session_memory.create()
-        self.plan_store = TaskPlanStore(
-            self.cli.workspace_context.root,
-            self.cli.chat_session.session_id,
-            root=self.state_root,
-        )
-        self.cli.task_plan_store = self.plan_store
-        self.plan_items = self.plan_store.load()
-        if self.cli.agent_runtime is not None:
-            self.cli.agent_runtime.task_plan_store = self.plan_store
+        if self.cli.chat_session is not None:
+            self._sync_session_plan()
         self._sync_plan_context()
         self.cli.permission_manager.approval_callback = self.permission_broker.request
         if getattr(self.console, "color_system", None) in {None, "standard", "windows"}:
@@ -510,6 +508,14 @@ class FenrirAgentTui(App[None]):
         if message.lower() in {"/clear", "/cls"}:
             self.action_clear_timeline()
             return
+        is_model_turn = self.cli.is_model_turn_command(message)
+        if (
+            self.cli.chat_session is None
+            and (not message.startswith(("/", "!")) or is_model_turn)
+            and message.casefold() != "/retry"
+        ):
+            self.cli.start_chat_session()
+            self._sync_session_plan()
         self._mount_message(f"You\n{message}", "user-message")
         self._run_message(message)
 
@@ -589,6 +595,7 @@ class FenrirAgentTui(App[None]):
     def action_clear_timeline(self) -> None:
         self.query_one("#timeline", VerticalScroll).remove_children()
         self._react_card = None
+        self._react_summary_emitted = False
         self._plan_card = None
         self._thinking_card = None
         self._thinking_body = None
@@ -1117,6 +1124,11 @@ class FenrirAgentTui(App[None]):
             if self._assistant:
                 self._assistant.update(self._assistant_segment_text)
         elif event.type == "status":
+            if (
+                not self.cli.react_trace_enabled
+                and event.content.startswith("ReAct step ")
+            ):
+                return
             self._set_activity_override(event.content)
             self._assistant = None
             self._mount_message(f"Status · {event.content}", "event-card status-card")
@@ -1146,25 +1158,40 @@ class FenrirAgentTui(App[None]):
             maximum = int(details.get("max_steps", 0))
             label = f"ReAct · {phase} · {steps}/{maximum}"
             self._set_activity_override(label)
-            if self._react_card is None:
-                self._react_card = self._mount_message(
-                    label, "event-card react-card"
+            if self.cli.react_trace_enabled:
+                if self._react_card is None:
+                    self._react_card = self._mount_message(
+                        label, "event-card react-card"
+                    )
+                else:
+                    self._react_card.update(label)
+            elif (
+                not self._react_summary_emitted
+                and phase == "finish"
+                and steps > 0
+            ):
+                self._react_summary_emitted = True
+                self._mount_message(
+                    f"Completed · {steps} internal steps",
+                    "event-card react-summary-card",
                 )
-            else:
-                self._react_card.update(label)
             self._refresh_state()
         elif event.type == "tool":
             self._set_activity_override(f"Using tool · {event.name}")
             self._assistant = None
             details = json.dumps(dict(event.arguments), indent=2, default=str)
+            target = self._tool_target(event.arguments)
+            if target:
+                self._tool_targets.setdefault(event.name, []).append(target)
             self._mount_collapsible(
-                f"Tool · {event.name}", details, "event-card tool-card"
+                f"Tool · {event.name}{f' · {target}' if target else ''}",
+                details,
+                "event-card tool-card",
             )
         elif event.type == "tool_result":
             self._set_activity_override(f"Tool complete · {event.name}")
             self._assistant = None
-            text = f"Result · {event.name}: {event.summary or 'complete'}"
-            self._mount_message(text, "event-card result-card")
+            self._mount_message(self._tool_result_label(event), "event-card result-card")
         elif event.type == "file_change":
             self._assistant = None
             details = dict(event.details)
@@ -1177,7 +1204,10 @@ class FenrirAgentTui(App[None]):
                 f"(+{added}/-{removed}){suffix}"
             )
             self._mount_collapsible(
-                title, self._diff_preview(diff), "event-card change-card"
+                title,
+                self._diff_preview(self._short_diff(diff)),
+                "event-card change-card",
+                collapsed=False,
             )
         elif event.type == "task_plan":
             self._assistant = None
@@ -1202,6 +1232,72 @@ class FenrirAgentTui(App[None]):
         self._prune_timeline()
         return message
 
+    def _register_permission_request(self, request: PermissionRequest) -> None:
+        """Keep permission prompts visible after their modal has closed."""
+        self._assistant = None
+        self._mount_message(
+            f"Permission requested · {request.action} · {request.target}",
+            "event-card approval-card",
+        )
+
+    def _register_permission_decision(
+        self, request: PermissionRequest, decision: PermissionDecision
+    ) -> None:
+        labels = {
+            PermissionDecision.ALLOW_ONCE: "Approved once",
+            PermissionDecision.ALLOW_SESSION: "Approved for this session",
+            PermissionDecision.ALWAYS_ALLOW: "Approved for this workspace",
+            PermissionDecision.DENY: "Denied",
+        }
+        self._assistant = None
+        self._mount_message(
+            f"{labels[decision]} · {request.action} · {request.target}",
+            "event-card approval-card",
+        )
+
+    @staticmethod
+    def _tool_target(arguments: object) -> str:
+        if not isinstance(arguments, Mapping):
+            return ""
+        for key in ("path", "url", "query", "command", "goal"):
+            value = arguments.get(key)
+            if isinstance(value, list):
+                value = " ".join(map(str, value))
+            if value:
+                text = str(value).replace("\n", " ").strip()
+                return text[:96] + ("…" if len(text) > 96 else "")
+        return ""
+
+    def _tool_result_label(self, event: AgentEvent) -> str:
+        """Name write artifacts instead of hiding them in generic telemetry."""
+        targets = self._tool_targets.get(event.name, [])
+        target = targets.pop(0) if targets else ""
+        if not targets:
+            self._tool_targets.pop(event.name, None)
+        summary = event.summary or "complete"
+        if event.name == "write_text_file" and target:
+            return f"Created file · {target} · {summary}"
+        if event.name == "edit_text_file" and target:
+            return f"Updated file · {target} · {summary}"
+        if event.name == "create_directory" and target:
+            return f"Created folder · {target} · {summary}"
+        return f"Result · {event.name}: {summary}"
+
+    @staticmethod
+    def _short_diff(diff: str, max_changed_lines: int = 8) -> str:
+        """Keep an expanded chat preview useful without flooding the timeline."""
+        changed = 0
+        preview: list[str] = []
+        for line in diff.splitlines(keepends=True):
+            is_change = line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+            if is_change:
+                changed += 1
+            if changed > max_changed_lines:
+                preview.append("… additional changed lines hidden\n")
+                break
+            preview.append(line)
+        return "".join(preview)
+
     @staticmethod
     def _diff_preview(diff: str) -> Text:
         """Render bounded unified diffs with full semantic foreground/background styles."""
@@ -1224,11 +1320,12 @@ class FenrirAgentTui(App[None]):
         title: str,
         body: str | Text,
         classes: str = "event-card",
+        collapsed: bool = True,
     ) -> Collapsible:
         card = Collapsible(
             Static(body, markup=False),
             title=title,
-            collapsed=True,
+            collapsed=collapsed,
             classes=classes,
         )
         self.query_one("#timeline", VerticalScroll).mount(card)
@@ -1358,6 +1455,7 @@ class FenrirAgentTui(App[None]):
                 f"· session {session[:8]}{history}"
             )
         self.query_one("#status-line", Static).update(status)
+
 
     def _refresh_plan(self, selected: int | None = None) -> None:
         if not self.plan_items:

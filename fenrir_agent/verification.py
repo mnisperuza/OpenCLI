@@ -108,7 +108,7 @@ class VerificationManager:
     ) -> VerificationResult:
         if not sandbox.is_available():
             raise RuntimeError(
-                "Verification requires an active sandbox. Use /sandbox docker or E2B."
+                "Verification requires an active sandbox. Use /sandbox on."
             )
         recipe = self.select(current_directory, requested)
         command_text = " ".join(recipe.command)

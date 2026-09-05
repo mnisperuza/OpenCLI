@@ -2,7 +2,7 @@
 
 # Fenrir Agent
 
-### A local-first coding and research agent for trusted terminal workspaces.
+### The best ideas from modern AI CLIs, unified in one trusted agent.
 
 [![CI](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml/badge.svg)](https://github.com/mnisperuza/OpenCLI/actions/workflows/harness-gates.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -102,7 +102,7 @@ python -m fenrir_agent --cli
 
 | Platform | Local GGUF setup | Notes |
 |---|---|---|
-| Windows | `winget install llama.cpp` | Native PowerShell and the Textual workspace are supported. Docker sandboxing needs Docker Desktop. |
+| Windows | `winget install llama.cpp` | Native PowerShell and the Textual workspace are supported. The default sandbox requires Codex CLI; Docker is optional. |
 | macOS | `brew install llama.cpp` | llama.cpp is the recommended GGUF path; direct model loading can use Apple MPS. |
 | Linux | Install llama.cpp and put `llama-server` on `PATH` | Docker sandbox support is available when Docker is installed. |
 
@@ -197,23 +197,32 @@ Fenrir Agent gives the agent useful tools without granting ambient authority.
 |---|---|
 | Files | Reads, writes, and bounded edits stay inside the trusted workspace; protected and secret-like paths are blocked. |
 | Web | Search and fetch require explicit approval; every result is treated as untrusted data. |
-| Shell work | Commands run only inside a user-selected Docker or E2B sandbox—never by silently falling back to the host shell. |
+| Shell work | Sandboxing starts off. When enabled, commands use Codex's native OS boundary by default; Docker and E2B remain explicit alternatives. There is no host-shell fallback. |
 | Changes | Mutations carry receipts; recovery, verification, and task-plan completion are evidence-aware. |
 | Sessions | Historical archives are text, not executable instructions; raw tool and validation errors are kept out of durable model context. |
 
-Docker sandboxes use ephemeral containers with network disabled, a read-only root filesystem, dropped capabilities, no privilege escalation, and CPU/RAM/PID limits. The workspace mounts read-only unless you grant a write approval.
+Fenrir uses the installed Codex CLI as its default sandbox engine. This gives commands Codex's platform-native boundary, disables command network access, blocks writes outside the workspace, and selects a read-only or workspace-write profile for each run. On Windows, Fenrir probes elevated isolation first and falls back to Codex's unelevated mode only when required. Sandboxing remains off when Fenrir starts.
 
 ```text
-/sandbox docker python:3.12-slim
+/sandbox on
 !python -V
 !!python -m pytest -q
 ```
+
+Install or update the [Codex CLI](https://developers.openai.com/codex/cli/) before using `/sandbox on`. Fenrir resolves the native executable, strips credential-like environment variables, and fails closed if the boundary is unavailable. Set `FENRIR_CODEX_SANDBOX_BIN` only when an explicit native Codex executable must be used.
+
+Docker sandboxes remain available as ephemeral containers with network disabled, a read-only root filesystem, dropped capabilities, no privilege escalation, and CPU/RAM/PID limits. Docker receives a filtered workspace snapshot; its writes do not persist to the host workspace.
 
 E2B sandboxes are explicitly connected or created by you. Fenrir Agent does not create, stop, push, or pull a remote sandbox on the agent’s behalf.
 
 ## Research that respects context
 
-`/search fast` returns compact ranked results. `/search deep` builds a bounded evidence packet from general web, news, instant answers, and arXiv; it deduplicates sources, preserves citations, and keeps sourced facts separate from inference and uncertainty.
+`/search fast` returns compact ranked results. `/search deep` performs a
+bounded, four-angle research pass: core facts, primary sources, independent
+evidence, and limitations or disagreement. It fetches diverse sources and
+returns citation-ready excerpts plus explicit coverage and unresolved angles.
+The active search mode also applies when Fenrir pre-grounds an explicit web
+request such as “search current information about …”.
 
 Deep research is deliberately bounded to six sources and 12,000 characters of evidence. The point is useful research inside an agent run—not unlimited browsing disguised as context.
 
@@ -229,7 +238,7 @@ Type `/` in the Textual workspace for filtered command completion. Invalid slash
 | Research | `/web on\|off`, `/web always`, `/web ask`, `/search fast\|deep\|status` |
 | Workspace | `/pwd`, `/cd PATH`, `/roots`, `/permissions`, `/permissions reset` |
 | Plans and memory | `/plan`, `/plan add STEP`, `/memory`, `/remember TEXT`, `/session-name TEXT` |
-| Sandboxes | `/sandbox docker [IMAGE]`, `/sandbox e2b connect ID`, `/sandbox push`, `/sandbox pull`, `/sandbox off` |
+| Sandboxes | `/sandbox on`, `/sandbox codex`, `/sandbox docker [IMAGE]`, `/sandbox e2b connect ID`, `/sandbox status`, `/sandbox off` |
 | Session | `/new`, `/history`, `/clear`, `/exit` |
 
 Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approved one. Commands are parsed as argv, not passed through a host shell.
@@ -247,6 +256,7 @@ Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approve
 | `OPENROUTER_API_KEY`, `DASHSCOPE_API_KEY` or `QWEN_API_KEY` | OpenRouter and Qwen Cloud keys. |
 | `FREELLMAPI_API_KEY`, `LITELLM_API_KEY`, `DS2API_API_KEY` | Optional gateway keys. |
 | `FENRIR_HARNESS_MODE` | `v2` (default) or `legacy` compatibility harness. |
+| `FENRIR_CODEX_SANDBOX_BIN` | Optional absolute path to a native Codex executable used by the default sandbox backend. |
 
 ## Development
 

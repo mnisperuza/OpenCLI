@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -11,8 +12,9 @@ from fenrir_agent.cli import FenrirAgent
 from fenrir_agent.react_loop import (
     ReactCritique, ReactLoopController, ReactLoopLimitError, ReactLoopPolicy,
 )
-from fenrir_agent.sandbox import E2BSandbox, SandboxManager
-from fenrir_agent.sandbox import DockerSandbox
+from fenrir_agent.sandbox import (
+    CodexSandbox, DockerSandbox, E2BSandbox, SandboxManager,
+)
 from fenrir_agent.task_plan import TaskPlanStore
 
 
@@ -156,6 +158,96 @@ class E2BSandboxTests(TestCase):
         mount = invocation[invocation.index("--mount") + 1]
         self.assertNotIn("readonly", mount)
         self.assertEqual(invocation[invocation.index("--workdir") + 1], "/workspace/src")
+
+
+class CodexSandboxTests(TestCase):
+    def test_command_environment_excludes_credentials(self):
+        with patch.dict(
+            os.environ,
+            {"PATH": "tools", "OPENAI_API_KEY": "secret", "CUSTOM_TOKEN": "secret"},
+            clear=True,
+        ):
+            environment = CodexSandbox._safe_environment()
+
+        self.assertEqual(environment["PATH"], "tools")
+        self.assertNotIn("OPENAI_API_KEY", environment)
+        self.assertNotIn("CUSTOM_TOKEN", environment)
+
+    @patch("fenrir_agent.sandbox.CodexSandbox.is_available", return_value=True)
+    @patch("fenrir_agent.sandbox.subprocess.run")
+    def test_uses_builtin_profiles_and_never_a_shell(self, mocked_run, _available):
+        mocked_run.return_value = SimpleNamespace(
+            returncode=0, stdout="ok\n", stderr=""
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "codex.exe"
+            executable.touch()
+            sandbox = CodexSandbox(root, executable=executable)
+
+            read_result = sandbox.run(["python", "-V"])
+            read_call = mocked_run.call_args
+            write_result = sandbox.run(
+                ["python", "-m", "pytest"], write_access=True
+            )
+            write_call = mocked_run.call_args
+
+        self.assertIn("fenrir-read-only", read_call.args[0])
+        self.assertIn("fenrir-workspace", write_call.args[0])
+        self.assertIn(
+            "permissions.fenrir-read-only.network.enabled=false",
+            read_call.args[0],
+        )
+        self.assertIn(
+            "permissions.fenrir-workspace.network.enabled=false",
+            write_call.args[0],
+        )
+        self.assertFalse(read_call.kwargs["shell"])
+        self.assertFalse(write_call.kwargs["shell"])
+        self.assertEqual(read_result["network"], "disabled")
+        self.assertFalse(read_result["changes_persisted"])
+        self.assertTrue(write_result["changes_persisted"])
+
+    @patch("fenrir_agent.sandbox.CodexSandbox.is_available", return_value=True)
+    def test_rejects_cwd_escape_before_execution(self, _available):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "codex.exe"
+            executable.touch()
+            sandbox = CodexSandbox(root, executable=executable)
+            with self.assertRaises(ValueError):
+                sandbox.run(["python", "-V"], cwd="../outside")
+
+    @patch("fenrir_agent.sandbox.CodexSandbox.is_available", return_value=True)
+    @patch("fenrir_agent.sandbox.subprocess.run")
+    def test_windows_setup_falls_back_to_unelevated(self, mocked_run, _available):
+        mocked_run.side_effect = [
+            SimpleNamespace(returncode=1, stdout="", stderr="elevation denied"),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "codex.exe"
+            executable.touch()
+            sandbox = CodexSandbox(root, executable=executable)
+            with patch("fenrir_agent.sandbox.os.name", "nt"):
+                status = sandbox.prepare()
+
+        self.assertTrue(status["available"])
+        self.assertEqual(status["windows_mode"], "unelevated")
+        self.assertEqual(mocked_run.call_count, 2)
+
+    @patch("fenrir_agent.sandbox.CodexSandbox.prepare")
+    def test_manager_selects_codex_as_default(self, prepare):
+        prepare.return_value = {
+            "backend": "codex", "available": True, "network": "disabled"
+        }
+        with TemporaryDirectory() as directory:
+            manager = SandboxManager(Path(directory))
+            result = manager.use_default()
+
+        self.assertEqual(result["backend"], "codex")
+        self.assertEqual(manager.backend, "codex")
 
 
 class ReactLoopTests(TestCase):
@@ -534,6 +626,44 @@ class ReactLoopTests(TestCase):
         self.assertEqual(result["exit_code"], 0)
         self.assertEqual(approvals, ["command", "file_write"])
 
+    def test_agent_codex_command_relies_on_native_boundary_without_prompt(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+        class Sandbox:
+            backend = "codex"
+
+            def is_available(self):
+                return True
+
+            def status(self):
+                return {"backend": "codex", "available": True}
+
+            def run(self, command, **kwargs):
+                return {
+                    "exit_code": 0,
+                    "output": "ok",
+                    "backend": "codex",
+                    "changes_persisted": kwargs.get("write_access", False),
+                }
+
+        approvals = []
+        runtime = PydanticAgentRuntime(
+            Engine(),
+            config=RuntimeConfig(persist_state=False),
+            sandbox=Sandbox(),
+            permission_callback=lambda category, *_args: (
+                approvals.append(category) or False
+            ),
+        )
+        result = runtime.run_sandboxed_command(
+            ["python", "-V"], write_access=True
+        )
+
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(approvals, [])
+
     def test_planning_only_prompt_is_not_forced_into_mutation_mode(self):
         class Engine:
             current_mode = "test"
@@ -826,8 +956,139 @@ class ReactLoopTests(TestCase):
         self.assertEqual(events, ["Tool call rejected: invalid JSON or unsupported tool."])
         self.assertEqual(captured[0]["disposition"], "invalid")
 
+    def test_local_adapter_repairs_malformed_tool_call_before_finalizing(self):
+        captured = []
+
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+            def __init__(self):
+                self.prompts = []
+
+            def generate_runtime_stream(self, prompt):
+                self.prompts.append(prompt)
+                content = (
+                    '<tool_call>{"name":"read_text_file","arguments":'
+                    if len(self.prompts) == 1
+                    else '<tool_call>{"name":"read_text_file",'
+                    '"arguments":{"path":"index.html"}}</tool_call>'
+                )
+                yield {"type": "token", "content": content}
+
+        engine = Engine()
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="Read a workspace file.",
+            parameters_json_schema={"type": "object"},
+        )])
+        adapter = LocalModelAdapter(engine, event_sink=captured.append)
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertEqual(len(events), 1)
+        self.assertIsInstance(events[0], dict)
+        self.assertEqual(events[0][0].name, "read_text_file")
+        self.assertEqual(len(engine.prompts), 2)
+        self.assertIn("TOOL CALL REJECTED", engine.prompts[1])
+        self.assertIn('<tool_call>{"name":"tool_name"', engine.prompts[1])
+        self.assertEqual(captured[0]["disposition"], "tool_calls")
+
+    def test_local_adapter_preserves_final_request_budget_over_repair(self):
+        class Engine:
+            current_mode = "test"
+            MODELS = {"test": {"path": "test-model"}}
+
+            def __init__(self):
+                self.prompts = []
+
+            def generate_runtime_stream(self, prompt):
+                self.prompts.append(prompt)
+                yield {
+                    "type": "token",
+                    "content": '<tool_call>{"name":"read_text_file","arguments":',
+                }
+
+        engine = Engine()
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="Read a workspace file.",
+            parameters_json_schema={"type": "object"},
+        )])
+        adapter = LocalModelAdapter(
+            engine, max_model_requests=2, final_response_request_reserve=1,
+        )
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertEqual(events, ["Tool call rejected: invalid JSON or unsupported tool."])
+        self.assertEqual(len(engine.prompts), 1)
+
+    def test_remote_adapter_repairs_invalid_tool_event_before_finalizing(self):
+        class Client:
+            def __init__(self):
+                self.requests = []
+
+            def stream_chat(self, messages, _tools, _tool_choice="auto"):
+                self.requests.append(messages)
+                if len(self.requests) == 1:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [{"id": "bad", "name": "not_a_tool", "arguments": "{}"}],
+                    }
+                else:
+                    yield {
+                        "type": "tool_calls",
+                        "calls": [{
+                            "id": "good", "name": "read_text_file",
+                            "arguments": '{"path":"index.html"}',
+                        }],
+                    }
+
+        class Engine:
+            backend = "remote_api"
+            current_mode = "api"
+            MODELS = {"api": {"path": "provider/model"}}
+
+            def __init__(self):
+                self.api_client = Client()
+
+        engine = Engine()
+        info = SimpleNamespace(function_tools=[SimpleNamespace(
+            name="read_text_file", description="Read a workspace file.",
+            parameters_json_schema={"type": "object"},
+        )])
+        adapter = LocalModelAdapter(engine)
+
+        async def collect():
+            return [event async for event in adapter.stream([], info)]
+
+        events = asyncio.run(collect())
+        self.assertEqual(events[0][0].name, "read_text_file")
+        self.assertEqual(len(engine.api_client.requests), 2)
+        repair = engine.api_client.requests[1][-1]["content"]
+        self.assertIn("TOOL CALL REJECTED", repair)
+        self.assertIn("read_text_file", str(engine.api_client.requests[1]))
+
 
 class SandboxCliTests(TestCase):
+    @patch("fenrir_agent.sandbox.CodexSandbox.prepare")
+    def test_cli_sandbox_is_off_until_default_is_enabled(self, prepare):
+        prepare.return_value = {
+            "backend": "codex", "available": True, "network": "disabled"
+        }
+        cli = FenrirAgent(dry_run=True)
+        self.assertFalse(cli.sandbox_enabled)
+        self.assertEqual(cli.sandbox.backend, "none")
+
+        with patch("builtins.print"):
+            cli.handle_command("/sandbox on")
+
+        self.assertTrue(cli.sandbox_enabled)
+        self.assertEqual(cli.sandbox.backend, "codex")
+
     @patch("fenrir_agent.sandbox.DockerSandbox.is_available", return_value=True)
     def test_cli_selects_docker_and_toggles_react(self, _available):
         cli = FenrirAgent(dry_run=True)
@@ -851,6 +1112,13 @@ class SandboxCliTests(TestCase):
         self.assertEqual(status["mode"], "host_managed")
         self.assertFalse(status["single_action_per_model_step"])
         self.assertEqual(status["phase"], "ready")
+
+    def test_cli_react_trace_is_hidden_by_default_and_can_be_enabled(self):
+        cli = FenrirAgent(dry_run=True)
+        self.assertFalse(cli.react_trace_enabled)
+        with patch("builtins.print"):
+            cli.handle_command("/react-trace on")
+        self.assertTrue(cli.react_trace_enabled)
 
     def test_cli_can_select_staged_harness_mode(self):
         cli = FenrirAgent(dry_run=True)

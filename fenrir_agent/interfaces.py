@@ -87,7 +87,7 @@ class SessionStore(Protocol):
 
 
 class SandboxBackend(Protocol):
-    """Execute bounded argv commands outside the host process."""
+    """Execute bounded argv commands behind an enforced isolation boundary."""
 
     backend: str
 

@@ -18,6 +18,38 @@ from fenrir_agent.ui_events import AgentEvent
 
 
 class FenrirAgentTuiTests(IsolatedAsyncioTestCase):
+    def test_routine_status_and_results_use_faded_field_grey(self):
+        css = FenrirAgentTui.CSS
+        self.assertIn(".status-card { color: #8b9c9a;", css)
+        self.assertIn(".result-card { color: #78aa90;", css)
+
+    async def test_workspace_welcome_shows_guidance(self):
+        with TemporaryDirectory() as directory:
+            cli = FenrirAgent(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test():
+                welcome = next(iter(app.query(".assistant-message")))
+                self.assertIn("Fenrir Agent workspace", str(welcome.render()))
+                self.assertIsNone(cli.chat_session)
+                self.assertEqual(cli.session_memory.list(), [])
+
+    async def test_first_tui_message_starts_a_session(self):
+        with TemporaryDirectory() as directory:
+            cli = FenrirAgent(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                with patch.object(app, "_run_message") as run_message:
+                    app._handle_event(AgentEvent("status", "Ready"))
+                    prompt = app.query_one("#prompt")
+                    prompt.text = "Hello"
+                    app.action_submit()
+                    await pilot.pause()
+                run_message.assert_called_once_with("Hello")
+                self.assertIsNotNone(cli.chat_session)
+                self.assertEqual(len(cli.session_memory.list()), 1)
+
     async def test_escape_during_generation_requests_transport_cancel(self):
         with TemporaryDirectory() as directory:
             cli = FenrirAgent(dry_run=True)
@@ -134,6 +166,7 @@ class FenrirAgentTuiTests(IsolatedAsyncioTestCase):
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
             app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
+                cli.react_trace_enabled = True
                 app._begin_assistant()
                 app._handle_event(
                     AgentEvent("react_state", details={"phase": "plan", "steps": 0, "max_steps": 10})
@@ -145,6 +178,26 @@ class FenrirAgentTuiTests(IsolatedAsyncioTestCase):
                 cards = list(app.query(".react-card"))
                 self.assertEqual(len(cards), 1)
                 self.assertIn("act", str(cards[0].render()))
+
+    async def test_react_steps_are_quiet_by_default_and_finish_once(self):
+        with TemporaryDirectory() as directory:
+            cli = FenrirAgent(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._begin_assistant()
+                app._handle_event(AgentEvent("status", "ReAct step 4/20: read_text_file"))
+                app._handle_event(
+                    AgentEvent("react_state", details={"phase": "act", "steps": 4, "max_steps": 20})
+                )
+                app._handle_event(
+                    AgentEvent("react_state", details={"phase": "finish", "steps": 4, "max_steps": 20})
+                )
+                await pilot.pause()
+                self.assertEqual(len(app.query(".react-card")), 0)
+                summaries = list(app.query(".react-summary-card"))
+                self.assertEqual(len(summaries), 1)
+                self.assertIn("4 internal steps", str(summaries[0].render()))
 
     async def test_final_response_mounts_after_tool_trace(self):
         with TemporaryDirectory() as directory:
@@ -214,10 +267,51 @@ class FenrirAgentTuiTests(IsolatedAsyncioTestCase):
                 )
                 await pilot.pause()
                 preview = app.query_one(Collapsible)
+                self.assertFalse(preview.collapsed)
                 preview.collapsed = False
                 await pilot.pause()
                 self.assertFalse(preview.collapsed)
                 self.assertTrue(preview.has_class("change-card"))
+
+    async def test_file_write_result_names_created_artifact_in_timeline(self):
+        with TemporaryDirectory() as directory:
+            cli = FenrirAgent(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
+            async with app.run_test() as pilot:
+                app._handle_event(
+                    AgentEvent("tool", name="write_text_file", arguments={"path": "index.html"})
+                )
+                app._handle_event(
+                    AgentEvent("tool_result", name="write_text_file", summary="wrote 42 characters")
+                )
+                await pilot.pause()
+                messages = [str(item.render()) for item in app.query(".result-card")]
+                self.assertTrue(any("Created file" in message for message in messages))
+                self.assertTrue(any("index.html" in message for message in messages))
+
+    async def test_permission_choice_is_registered_in_timeline(self):
+        with TemporaryDirectory() as directory:
+            cli = FenrirAgent(dry_run=True)
+            cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
+            request = PermissionRequest(
+                "file_write", "write_text_file", "index.html", "Create page", Path(directory)
+            )
+            async with app.run_test() as pilot:
+                app._register_permission_request(request)
+                app._register_permission_decision(request, PermissionDecision.ALLOW_SESSION)
+                await pilot.pause()
+                messages = [str(item.render()) for item in app.query(".approval-card")]
+                self.assertTrue(any("Permission requested" in message for message in messages))
+                self.assertTrue(any("Approved for this session" in message for message in messages))
+
+    def test_short_diff_keeps_first_eight_changed_lines(self):
+        diff = "".join(f"+line {index}\n" for index in range(10))
+        preview = FenrirAgentTui._short_diff(diff)
+        self.assertIn("+line 7", preview)
+        self.assertNotIn("+line 8", preview)
+        self.assertIn("additional changed lines hidden", preview)
 
     def test_diff_preview_uses_line_backgrounds(self):
         preview = FenrirAgentTui._diff_preview("+added\n-removed\n context\n")
@@ -456,6 +550,7 @@ class TuiCommandTests(TestCase):
         fenrir.return_value.run.assert_called_once_with(api_start=False)
         fenrir.return_value.run_tui.assert_not_called()
 
+
     def test_agent_event_normalizes_chunks(self):
         event = AgentEvent.from_chunk(
             {"type": "tool", "name": "read_text_file", "arguments": {"path": "a.py"}}
@@ -514,8 +609,11 @@ class TuiCommandTests(TestCase):
         cli.engine = Engine()
         cli.agent_runtime = Runtime()
         cli.interrupt_handler = SimpleNamespace(reset=lambda: None)
-        with patch.object(
-            cli, "_context_snapshot", return_value=SimpleNamespace(used_tokens=4, estimated=True)
+        with (
+            patch.object(cli, "start_chat_session"),
+            patch.object(
+                cli, "_context_snapshot", return_value=SimpleNamespace(used_tokens=4, estimated=True)
+            ),
         ):
             events = list(cli.stream_turn("hi"))
 

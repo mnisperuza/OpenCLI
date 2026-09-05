@@ -420,6 +420,7 @@ class OpenAICompatibleClient:
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
         tool_choice: Any = "auto",
+        _tool_repair_attempt: int = 0,
     ) -> Generator[Dict[str, Any], None, None]:
         if not self.model:
             raise ApiProviderError("No API model selected")
@@ -429,6 +430,11 @@ class OpenAICompatibleClient:
             "messages": messages,
             "stream": True,
         }
+        if self.provider == "groq" and _tool_repair_attempt:
+            # Groq explicitly recommends a lower temperature after its server
+            # rejects malformed tool JSON. The rejected call never executes,
+            # so this retry is safe and does not repeat an external action.
+            body["temperature"] = 0.2
         if isinstance(self.max_output_tokens, int) and self.max_output_tokens > 0:
             body["max_tokens"] = self.max_output_tokens
         if (
@@ -446,7 +452,7 @@ class OpenAICompatibleClient:
             headers=self._headers(),
             method="POST",
         )
-        calls: Dict[int, Dict[str, str]] = {}
+        calls: Dict[int, Dict[str, Any]] = {}
         emitted_chars = 0
         provider_limited = False
         response_handle = None
@@ -524,6 +530,16 @@ class OpenAICompatibleClient:
                             {"id": "", "name": "", "arguments": ""},
                         )
                         state["id"] += str(tool_delta.get("id") or "")
+                        # Gemini's OpenAI-compatible endpoint attaches its
+                        # required reasoning continuity token to the call.
+                        # Keep the provider-owned structure byte-for-byte in
+                        # the logical sense (never synthesize or transform it)
+                        # so the adapter can return it on the next request.
+                        extra_content = tool_delta.get("extra_content")
+                        if not isinstance(extra_content, dict):
+                            extra_content = tool_delta.get("extraContent")
+                        if isinstance(extra_content, dict):
+                            state["extra_content"] = dict(extra_content)
                         function = tool_delta.get("function") or {}
                         if isinstance(function, dict):
                             state["name"] += str(function.get("name") or "")
@@ -534,6 +550,17 @@ class OpenAICompatibleClient:
             raise
         except HTTPError as error:
             body_text = error.read().decode("utf-8", errors="replace")
+            if (
+                self.provider == "groq"
+                and tools
+                and error.code == 400
+                and _tool_repair_attempt < 1
+                and self._is_groq_failed_tool_generation(body_text)
+            ):
+                yield from self.stream_chat(
+                    messages, tools, tool_choice, _tool_repair_attempt + 1
+                )
+                return
             if (
                 tools
                 and tool_choice is not None
@@ -567,6 +594,16 @@ class OpenAICompatibleClient:
                 "type": "tool_calls",
                 "calls": [calls[index] for index in sorted(calls)],
             }
+
+    @staticmethod
+    def _is_groq_failed_tool_generation(body: str) -> bool:
+        """Recognize Groq's documented rejected-tool payload without guessing."""
+        try:
+            payload = json.loads(body)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        error = payload.get("error") if isinstance(payload, dict) else None
+        return isinstance(error, dict) and isinstance(error.get("failed_generation"), dict)
 
 
 __all__ = [
