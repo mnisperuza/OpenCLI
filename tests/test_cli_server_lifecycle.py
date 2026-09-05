@@ -2,8 +2,8 @@ from unittest import TestCase
 from threading import Event
 from unittest.mock import Mock, patch
 
-from main.cli import EscapeInterruptWatcher, OpenCLI
-from main.permissions import PermissionDecision
+from fenrir_agent.cli import EscapeInterruptWatcher, FenrirAgent
+from fenrir_agent.permissions import PermissionDecision
 
 
 class FakeEngine:
@@ -19,14 +19,14 @@ class ServerLifecycleTests(TestCase):
         called = Event()
         watcher = EscapeInterruptWatcher(called.set, poll_seconds=0.001)
 
-        with patch("main.cli.check_for_esc", return_value=True):
+        with patch("fenrir_agent.cli.check_for_esc", return_value=True):
             watcher.start()
             self.assertTrue(called.wait(0.2))
         watcher.stop()
 
-    @patch("main.cli._thread.interrupt_main")
+    @patch("fenrir_agent.cli._thread.interrupt_main")
     def test_escape_uses_engine_stop_and_main_interrupt(self, mocked_interrupt):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.engine = Mock()
 
         cli._interrupt_from_escape()
@@ -35,7 +35,7 @@ class ServerLifecycleTests(TestCase):
         mocked_interrupt.assert_called_once_with()
 
     def test_runtime_cancellation_does_not_stop_engine_twice(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.engine = Mock()
         cli.agent_runtime = Mock()
 
@@ -45,7 +45,7 @@ class ServerLifecycleTests(TestCase):
         cli.engine.stop_generation.assert_not_called()
 
     def make_cli(self):
-        cli = object.__new__(OpenCLI)
+        cli = object.__new__(FenrirAgent)
         cli.engine = FakeEngine()
         cli.agent_runtime = object()
         cli.server_stopped_by_user = False
@@ -79,7 +79,7 @@ class ServerLifecycleTests(TestCase):
         self.assertFalse(self.make_cli().confirm_server_restart())
 
     def test_dry_run_shell_command_does_not_execute(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.sandbox.run = Mock()
 
         with patch("builtins.print"):
@@ -88,7 +88,7 @@ class ServerLifecycleTests(TestCase):
         cli.sandbox.run.assert_not_called()
 
     def test_web_command_disables_network_tools(self):
-        cli = OpenCLI()
+        cli = FenrirAgent()
 
         with patch("builtins.print"):
             self.assertTrue(cli.handle_command("/web off"))
@@ -96,7 +96,7 @@ class ServerLifecycleTests(TestCase):
         self.assertFalse(cli.permission_manager.web_enabled)
 
     def test_denied_shell_command_does_not_execute(self):
-        cli = OpenCLI()
+        cli = FenrirAgent()
         cli.sandbox_enabled = True
         cli.sandbox.run = Mock()
         cli.permission_manager.approval_callback = (

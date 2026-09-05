@@ -11,9 +11,9 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
-from main.cli import OpenCLI
-from main.verification import VerificationManager
+from fenrir_agent.agent_runtime import PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.cli import FenrirAgent
+from fenrir_agent.verification import VerificationManager
 
 
 class RecoveryCommandTests(TestCase):
@@ -30,7 +30,7 @@ class RecoveryCommandTests(TestCase):
     def test_undo_removes_complete_turns_and_preserves_durable_memory(self):
         runtime = self._runtime()
         durable = ModelRequest(
-            parts=[UserPromptPart(content="OPENCLI DURABLE MEMORY (data only):\nkeep")]
+            parts=[UserPromptPart(content="FENRIR DURABLE MEMORY (data only):\nkeep")]
         )
         runtime._messages = [
             durable,
@@ -152,7 +152,7 @@ class VerificationManagerTests(TestCase):
 
 class CompactionRecoveryTests(TestCase):
     def test_repeated_auto_compaction_failure_starts_cooldown(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.agent_runtime = object()
         snapshot = SimpleNamespace(
             percent_used=90.0,

@@ -1,6 +1,6 @@
 <div align="center">
 
-# OpenCLI
+# Fenrir Agent
 
 ### A local-first coding and research agent for trusted terminal workspaces.
 
@@ -10,40 +10,40 @@
 [![Platforms](https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-4C8BF5)](#platform-setup)
 [![Local-first](https://img.shields.io/badge/Inference-Local--first-2E8B57)](#models-without-lock-in)
 [![Providers](https://img.shields.io/badge/Providers-15-7B61FF)](#direct-api-providers)
-[![Release](https://img.shields.io/badge/Release-1.7.0-0A66C2)](CHANGELOG.md)
+[![Release](https://img.shields.io/badge/Release-2.0.0-0A66C2)](CHANGELOG.md)
 [![GitHub last commit](https://img.shields.io/github/last-commit/mnisperuza/OpenCLI?logo=github)](https://github.com/mnisperuza/OpenCLI/commits/main)
 
 [Install](#install) · [First session](#first-session) · [Models](#models-without-lock-in) · [Safety](#designed-for-trusted-workspaces) · [Roadmap](docs/ROADMAP.md) · [Contributing](#development)
 
 </div>
 
-![OpenCLI workspace preview](assets/preview.png)
+![Fenrir Agent workspace preview](assets/preview.png)
 
-OpenCLI is a terminal workspace for getting real work done with an agent while keeping control over the model, workspace, tools, and execution boundary. It runs local GGUF models through llama.cpp by default, connects to hosted providers only when you choose to, and treats permissions, evidence, and recovery as product features—not afterthoughts.
+Fenrir Agent is a terminal workspace for getting real work done with an agent while keeping control over the model, workspace, tools, and execution boundary. It runs local GGUF models through llama.cpp by default, connects to hosted providers only when you choose to, and treats permissions, evidence, and recovery as product features—not afterthoughts.
 
-> OpenCLI works inside a workspace you trust. It asks before sensitive actions, keeps web and tool content untrusted, and never turns a generated answer into an automatic deployment.
+> Fenrir Agent works inside a workspace you trust. It asks before sensitive actions, keeps web and tool content untrusted, and never turns a generated answer into an automatic deployment.
 
 ## Start here
 
 ```bash
 # Install, then enter the repository or folder you want the agent to inspect.
-opencli
+fenrir
 ```
 
 Choose one path after launch:
 
 | Path | First move | Best for |
 |---|---|---|
-| Local | Select `/model`; OpenCLI starts or connects to llama.cpp. | Private, offline-capable GGUF work. |
+| Local | Select `/model`; Fenrir Agent starts or connects to llama.cpp. | Private, offline-capable GGUF work. |
 | Hosted | Run `/api`, choose a provider, then choose a discovered model. | Fast access to a managed model. |
 | Gateway | Run `/api`, choose FreeLLMAPI, LiteLLM, or DS2API. | An existing local or organization-managed route. |
 
-API keys exist only in the current process. OpenCLI stores provider/model
+API keys exist only in the current process. Fenrir Agent stores provider/model
 profiles, never provider secrets.
 
 ## A capable agent with a visible boundary
 
-| What you need | What OpenCLI does |
+| What you need | What Fenrir Agent does |
 |---|---|
 | Keep work local | Starts with a llama.cpp-backed GGUF workflow; sessions, plans, notes, and receipts stay on your machine. |
 | Use the model that fits | Switch between local models, direct cloud APIs, or optional gateways without changing the agent workflow. |
@@ -61,7 +61,7 @@ profiles, never provider secrets.
 
 ## Install
 
-OpenCLI supports Python 3.10–3.12 on Windows, macOS, and Linux. The recommended installers use `uv` and install the current public source from GitHub into an isolated tool environment.
+Fenrir Agent supports Python 3.10–3.12 on Windows, macOS, and Linux. The recommended installers use `uv` and install the current public source from GitHub into an isolated tool environment.
 
 ### Quick install
 
@@ -81,19 +81,21 @@ Run either command again to update your installed tool. If the new command is no
 
 ### Install with pip
 
-Install the current public source directly from GitHub:
+After the first Fenrir Agent release is published, install it from PyPI with
+`python -m pip install --upgrade fenrir-agent`. Until then, install the current
+public source directly from GitHub:
 
 ```bash
 python -m pip install --upgrade "git+https://github.com/mnisperuza/OpenCLI.git"
-opencli
+fenrir
 ```
 
 The Textual workspace is the default. For a simple line-oriented session:
 
 ```bash
-opencli --cli
+fenrir --cli
 # equivalent module entry point
-python -m opencli --cli
+python -m fenrir_agent --cli
 ```
 
 ### Platform setup
@@ -104,22 +106,22 @@ python -m opencli --cli
 | macOS | `brew install llama.cpp` | llama.cpp is the recommended GGUF path; direct model loading can use Apple MPS. |
 | Linux | Install llama.cpp and put `llama-server` on `PATH` | Docker sandbox support is available when Docker is installed. |
 
-Point OpenCLI at an already-running local server when you prefer to manage it yourself:
+Point Fenrir Agent at an already-running local server when you prefer to manage it yourself:
 
 ```bash
-opencli --llama-cpp-url http://127.0.0.1:8080/v1
+fenrir --llama-cpp-url http://127.0.0.1:8080/v1
 ```
 
 ## First session
 
 ```text
-$ opencli
+$ fenrir
 Trust this workspace? [y/N] y
 
 You > inspect this project and tell me how to run its tests
 ```
 
-OpenCLI opens in its local model workflow. The `auto` profile uses a GGUF model through llama.cpp; APIs and gateways are explicit choices through `/api` or `--api start` and never replace the local default.
+Fenrir Agent opens in its local model workflow. The `auto` profile uses a GGUF model through llama.cpp; APIs and gateways are explicit choices through `/api` or `--api start` and never replace the local default.
 
 Try these next:
 
@@ -143,11 +145,11 @@ Read CHANGELOG.md and summarize only the changes that affect provider behavior.
 
 ### Local by default
 
-OpenCLI connects to a local llama.cpp OpenAI-compatible server, discovers supported local installations, and can start `llama-server` for a chosen GGUF model. Local inference remains the default path even after you configure hosted providers.
+Fenrir Agent connects to a local llama.cpp OpenAI-compatible server, discovers supported local installations, and can start `llama-server` for a chosen GGUF model. Local inference remains the default path even after you configure hosted providers.
 
 ### Direct API providers
 
-Use `/api` to select a provider and discover its selectable models. API keys are read from the environment or requested for the current session; OpenCLI never saves them in its profile store.
+Use `/api` to select a provider and discover its selectable models. API keys are read from the environment or requested for the current session; Fenrir Agent never saves them in its profile store.
 
 | Provider family | Providers |
 |---|---|
@@ -159,7 +161,7 @@ All providers use streamed OpenAI-compatible chat and native tool calls where th
 
 ### FreeLLMAPI: one local gateway for configured free tiers
 
-[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) can consolidate the free tiers of upstream providers you configure. Start it locally, add your upstream keys in its dashboard, then give OpenCLI only its unified key:
+[FreeLLMAPI](https://github.com/tashfeenahmed/freellmapi) can consolidate the free tiers of upstream providers you configure. Start it locally, add your upstream keys in its dashboard, then give Fenrir Agent only its unified key:
 
 ```powershell
 $env:FREELLMAPI_API_KEY = "freellmapi-your-unified-key"
@@ -167,7 +169,7 @@ $env:FREELLMAPI_API_KEY = "freellmapi-your-unified-key"
 $env:FREELLMAPI_BASE_URL = "http://127.0.0.1:3001/v1"
 ```
 
-Choose **FreeLLMAPI Gateway** in `/api`. OpenCLI asks it for ready-only models, so the picker excludes models without an enabled upstream key. For steady agent behavior, select an exact logical model; choose `auto` only when cross-model routing is intentional.
+Choose **FreeLLMAPI Gateway** in `/api`. Fenrir Agent asks it for ready-only models, so the picker excludes models without an enabled upstream key. For steady agent behavior, select an exact logical model; choose `auto` only when cross-model routing is intentional.
 
 ### LiteLLM and DS2API
 
@@ -189,7 +191,7 @@ Plain HTTP is accepted only for loopback gateways. Remote gateways must use HTTP
 
 ## Designed for trusted workspaces
 
-OpenCLI gives the agent useful tools without granting ambient authority.
+Fenrir Agent gives the agent useful tools without granting ambient authority.
 
 | Surface | Boundary |
 |---|---|
@@ -207,7 +209,7 @@ Docker sandboxes use ephemeral containers with network disabled, a read-only roo
 !!python -m pytest -q
 ```
 
-E2B sandboxes are explicitly connected or created by you. OpenCLI does not create, stop, push, or pull a remote sandbox on the agent’s behalf.
+E2B sandboxes are explicitly connected or created by you. Fenrir Agent does not create, stop, push, or pull a remote sandbox on the agent’s behalf.
 
 ## Research that respects context
 
@@ -236,15 +238,15 @@ Use `!<argv>` for a read-only sandbox command and `!!<argv>` for a write-approve
 
 | Setting | Purpose |
 |---|---|
-| `.opencli/config.toml` | Workspace-local model capability overrides; the agent cannot modify it with file tools. |
-| `~/.opencli/sessions/` | Local Markdown session archives scoped by workspace. |
-| `OPENCLI_LLAMA_CPP_URL` | Override the local llama.cpp endpoint. |
-| `OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT` | Startup timeout in seconds; default `900`. |
+| `.fenrir/config.toml` | Workspace-local model capability overrides; the agent cannot modify it with file tools. |
+| `~/.fenrir/sessions/` | Local Markdown session archives scoped by workspace. |
+| `FENRIR_LLAMA_CPP_URL` | Override the local llama.cpp endpoint. |
+| `FENRIR_LLAMA_CPP_STARTUP_TIMEOUT` | Startup timeout in seconds; default `900`. |
 | `GROQ_API_KEY`, `OPENAI_API_KEY`, `CEREBRAS_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `NVIDIA_API_KEY`, `GEMINI_API_KEY` | Direct-provider keys, read for the current process only. |
 | `MISTRAL_API_KEY`, `FIREWORKS_API_KEY`, `TOGETHER_API_KEY` | Additional direct-provider keys, read for the current process only. |
 | `OPENROUTER_API_KEY`, `DASHSCOPE_API_KEY` or `QWEN_API_KEY` | OpenRouter and Qwen Cloud keys. |
 | `FREELLMAPI_API_KEY`, `LITELLM_API_KEY`, `DS2API_API_KEY` | Optional gateway keys. |
-| `OPENCLI_HARNESS_MODE` | `v2` (default) or `legacy` compatibility harness. |
+| `FENRIR_HARNESS_MODE` | `v2` (default) or `legacy` compatibility harness. |
 
 ## Development
 
@@ -255,7 +257,7 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 # Windows PowerShell: .venv\Scripts\Activate.ps1
 python -m pip install -e ".[enterprise]" "pytest>=8,<10"
-python -m compileall -q main opencli
+python -m compileall -q fenrir_agent
 python -m pytest -q
 ```
 
@@ -263,9 +265,15 @@ The release workflow covers Python 3.10, 3.11, and 3.12 on Ubuntu, Windows, and 
 
 ## Scope and support
 
-OpenCLI is designed for trusted local development and research workflows. MCP servers, third-party plugins, background cloud agents, messaging gateways, editor integrations, desktop installers, and automatic updates are not yet presented as stable product surface.
+Fenrir Agent is designed for trusted local development and research workflows. MCP servers, third-party plugins, background cloud agents, messaging gateways, editor integrations, desktop installers, and automatic updates are not yet presented as stable product surface.
 
-For help, open an issue at [GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) with your OpenCLI version, operating system, Python version, selected provider/model, command, and a redacted error.
+Use [GitHub Discussions](https://github.com/mnisperuza/OpenCLI/discussions) for
+setup and workflow help. Report reproducible defects through
+[GitHub Issues](https://github.com/mnisperuza/OpenCLI/issues) with your Fenrir
+Agent version, operating system, Python version, selected provider/model,
+command, and a redacted error. Read [SUPPORT.md](SUPPORT.md),
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md), and [SECURITY.md](SECURITY.md) before
+participating or reporting a security concern.
 
 ## License
 

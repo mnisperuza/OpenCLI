@@ -5,8 +5,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from main.web_retrieval import WebRetrievalError, WebRetriever
-from main.agent_runtime import LocalModelAdapter, PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.web_retrieval import WebRetrievalError, WebRetriever
+from fenrir_agent.agent_runtime import LocalModelAdapter, PydanticAgentRuntime, RuntimeConfig
 
 
 def make_runtime(engine, workspace=None):
@@ -39,7 +39,7 @@ class FakeDDGS:
 
 
 class WebRetrieverTests(TestCase):
-    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    @patch("fenrir_agent.web_retrieval._is_public_web_url", return_value=True)
     def test_per_turn_fetch_limit_bounds_tool_context(self, _public_check):
         client = FakeDDGS(extracted={"content": "evidence"})
         retriever = WebRetriever(
@@ -68,7 +68,7 @@ class WebRetrieverTests(TestCase):
         self.assertTrue(output["permission_denied"])
         self.assertIsNone(client.search_kwargs)
 
-    @patch("main.web_retrieval._is_public_web_url")
+    @patch("fenrir_agent.web_retrieval._is_public_web_url")
     def test_permission_denial_prevents_fetch_dns_lookup(self, public_check):
         retriever = WebRetriever(permission_callback=lambda *_args: False)
 
@@ -119,7 +119,7 @@ class WebRetrieverTests(TestCase):
         with self.assertRaisesRegex(WebRetrievalError, "Web search failed"):
             retriever.web_search("test")
 
-    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    @patch("fenrir_agent.web_retrieval._is_public_web_url", return_value=True)
     def test_fetch_bounds_extracted_content(self, _public_url):
         client = FakeDDGS(extracted={"content": "x" * 1_500})
         retriever = WebRetriever(
@@ -132,7 +132,7 @@ class WebRetrieverTests(TestCase):
         self.assertEqual(len(output["content"]), 1_000)
         self.assertTrue(output["truncated"])
 
-    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    @patch("fenrir_agent.web_retrieval._is_public_web_url", return_value=True)
     def test_fetch_failure_is_recoverable_after_one_retry(self, _public_url):
         class FailingExtractor:
             def __init__(self):
@@ -157,7 +157,7 @@ class WebRetrieverTests(TestCase):
         with self.assertRaisesRegex(ValueError, "cannot be empty"):
             retriever.web_search("   ")
 
-    @patch("main.web_retrieval._is_public_web_url", return_value=True)
+    @patch("fenrir_agent.web_retrieval._is_public_web_url", return_value=True)
     def test_deep_search_returns_bounded_evidence_not_raw_pages(self, _public_url):
         client = FakeDDGS(
             results=[
@@ -222,7 +222,7 @@ class FakeEngine:
         if len(self.prompts) == 1:
             content = (
                 '<tool_call>{"name":"web_search","arguments":'
-                '{"query":"current OpenCLI test","max_results":1}}'
+                '{"query":"current FenrirAgent test","max_results":1}}'
                 "</tool_call>"
             )
         else:
@@ -250,7 +250,7 @@ class LFMFakeEngine(FakeEngine):
         if len(self.prompts) == 1:
             content = (
                 "<|tool_call_start|>[web_search("
-                "query='current OpenCLI test', max_results=1)]"
+                "query='current FenrirAgent test', max_results=1)]"
                 "<|tool_call_end|>"
             )
         else:
@@ -267,7 +267,7 @@ class PrefixedToolEngine(FakeEngine):
                 "type": "token",
                 "content": (
                     "<tool_call>{\"name\": \"web_search\", "
-                    "\"arguments\": {\"query\": \"current OpenCLI test\"}}"
+                    "\"arguments\": {\"query\": \"current FenrirAgent test\"}}"
                     "</tool_call>"
                 ),
             }

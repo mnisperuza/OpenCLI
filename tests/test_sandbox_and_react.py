@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from main.agent_runtime import LocalModelAdapter, PydanticAgentRuntime, RuntimeConfig
-from main.cli import OpenCLI
-from main.react_loop import (
+from fenrir_agent.agent_runtime import LocalModelAdapter, PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.cli import FenrirAgent
+from fenrir_agent.react_loop import (
     ReactCritique, ReactLoopController, ReactLoopLimitError, ReactLoopPolicy,
 )
-from main.sandbox import E2BSandbox, SandboxManager
-from main.task_plan import TaskPlanStore
+from fenrir_agent.sandbox import E2BSandbox, SandboxManager
+from fenrir_agent.sandbox import DockerSandbox
+from fenrir_agent.task_plan import TaskPlanStore
 
 
 class FakeRemoteFiles:
@@ -60,6 +61,22 @@ class FakeRemoteSandbox:
 
 
 class E2BSandboxTests(TestCase):
+    def test_docker_snapshot_excludes_secret_and_control_files(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "workspace"
+            root.mkdir()
+            (root / "app.py").write_text("print('ok')", encoding="utf-8")
+            (root / ".env").write_text("TOKEN=secret", encoding="utf-8")
+            (root / ".git").mkdir()
+            (root / ".git" / "config").write_text("private", encoding="utf-8")
+            snapshot = Path(directory) / "snapshot"
+            snapshot.mkdir()
+
+            DockerSandbox(root)._snapshot_workspace(snapshot)
+
+            self.assertTrue((snapshot / "app.py").is_file())
+            self.assertFalse((snapshot / ".env").exists())
+            self.assertFalse((snapshot / ".git").exists())
     def test_explicit_push_excludes_secrets_and_quotes_argv(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
@@ -114,7 +131,7 @@ class E2BSandboxTests(TestCase):
             self.assertEqual(result["conflicts"], ["app.py"])
             self.assertEqual(target.read_text(encoding="utf-8"), "local")
 
-    @patch("main.sandbox.DockerSandbox.is_available", return_value=True)
+    @patch("fenrir_agent.sandbox.DockerSandbox.is_available", return_value=True)
     def test_manager_accepts_user_selected_docker_image(self, _available):
         with TemporaryDirectory() as directory:
             manager = SandboxManager(Path(directory))
@@ -122,8 +139,8 @@ class E2BSandboxTests(TestCase):
         self.assertEqual(status["image"], "node:22-slim")
         self.assertEqual(manager.backend, "docker")
 
-    @patch("main.sandbox.shutil.which", return_value="docker")
-    @patch("main.sandbox.subprocess.run")
+    @patch("fenrir_agent.sandbox.shutil.which", return_value="docker")
+    @patch("fenrir_agent.sandbox.subprocess.run")
     def test_docker_write_mount_and_logical_cwd_are_explicit(self, mocked_run, _which):
         mocked_run.side_effect = [
             SimpleNamespace(returncode=0),
@@ -811,9 +828,9 @@ class ReactLoopTests(TestCase):
 
 
 class SandboxCliTests(TestCase):
-    @patch("main.sandbox.DockerSandbox.is_available", return_value=True)
+    @patch("fenrir_agent.sandbox.DockerSandbox.is_available", return_value=True)
     def test_cli_selects_docker_and_toggles_react(self, _available):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         with patch("builtins.print"):
             cli.handle_command("/sandbox docker python:3.12-slim")
             cli.handle_command("/react off")
@@ -824,7 +841,7 @@ class SandboxCliTests(TestCase):
         self.assertEqual(cli.react_status()["phase"], "off")
 
     def test_cli_react_on_reports_host_managed_mode(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.react_enabled = False
         with patch("builtins.print"):
             cli.handle_command("/react on")
@@ -836,7 +853,7 @@ class SandboxCliTests(TestCase):
         self.assertEqual(status["phase"], "ready")
 
     def test_cli_can_select_staged_harness_mode(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.agent_runtime = object()
         with patch("builtins.print"):
             self.assertTrue(cli.handle_command("/harness mode legacy"))

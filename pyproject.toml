@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "opencli"
+name = "fenrir-agent"
 dynamic = ["version"]
-description = "OpenCLI — private local and API AI agent for terminal workflows"
+description = "Fenrir Agent - private local and API AI agent for terminal workflows"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -28,7 +28,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
-keywords = ["ai", "agent", "assistant", "llm", "local", "cli", "developer-tools"]
+keywords = ["ai", "agent", "assistant", "fenrir", "llm", "local", "cli", "developer-tools"]
 
 # Core dependencies
 dependencies = [
@@ -70,20 +70,21 @@ enterprise = [
 constrained = ["outlines>=1.2,<2"]
 
 [project.scripts]
-opencli = "opencli.cli:main"
+fenrir = "fenrir_agent.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mnisperuza/OpenCLI"
 Documentation = "https://github.com/mnisperuza/OpenCLI#readme"
 Repository = "https://github.com/mnisperuza/OpenCLI"
 Issues = "https://github.com/mnisperuza/OpenCLI/issues"
+Changelog = "https://github.com/mnisperuza/OpenCLI/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["main*", "opencli*"]
+include = ["fenrir_agent*"]
 
 [tool.setuptools.package-data]
-opencli = ["py.typed"]
+fenrir_agent = ["py.typed"]
 
 [tool.setuptools.dynamic]
-version = {attr = "main._version.__version__"}
+version = {attr = "fenrir_agent._version.__version__"}

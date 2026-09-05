@@ -14,6 +14,6 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 1
 fi
 
-printf '%s\n' 'Installing OpenCLI...'
+printf '%s\n' 'Installing Fenrir Agent...'
 uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
-printf '%s\n' 'OpenCLI installed. Run: opencli'
+printf '%s\n' 'Fenrir Agent installed. Run: fenrir'

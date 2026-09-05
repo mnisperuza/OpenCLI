@@ -10,6 +10,6 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     throw "Could not find uv after installation. Open a new terminal and run this installer again."
 }
 
-Write-Host "Installing OpenCLI..."
+Write-Host "Installing Fenrir Agent..."
 uv tool install --upgrade git+https://github.com/mnisperuza/OpenCLI.git
-Write-Host "OpenCLI installed. Run: opencli"
+Write-Host "Fenrir Agent installed. Run: fenrir"

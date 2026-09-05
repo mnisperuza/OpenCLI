@@ -3,9 +3,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
-from main.cli import OpenCLI
-from main.skills import SkillRegistry
+from fenrir_agent.agent_runtime import PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.cli import FenrirAgent
+from fenrir_agent.skills import SkillRegistry
 
 
 class SkillRegistryTests(TestCase):
@@ -33,7 +33,7 @@ class SkillRegistryTests(TestCase):
             user_skills = root / "user-skills"
             self._write_skill(user_skills, "review", "User review", "User steps")
             self._write_skill(
-                workspace / ".opencli" / "skills",
+                workspace / ".fenrir" / "skills",
                 "review",
                 "Workspace review",
                 "Workspace steps",
@@ -114,7 +114,7 @@ class SkillCommandTests(TestCase):
             SkillRegistryTests._write_skill(
                 skills, "review", "Review code", "Inspect before reporting"
             )
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.skill_registry = SkillRegistry(
                 workspace, user_root=skills, state_root=root / "state"
             )

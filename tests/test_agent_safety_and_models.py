@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -6,13 +7,13 @@ from unittest.mock import patch
 
 from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
-from main.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, RuntimeConfig
-from main.api_profiles import ApiProfileRegistry
-from main.cli import OpenCLI
-from main.model_registry import ModelRegistry, ModelRegistryError
-from main.model_profiles import BUILTIN_PROFILES
-from main.permissions import PermissionManager
-from main.sandbox import DockerSandbox
+from fenrir_agent.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.api_profiles import ApiProfileRegistry
+from fenrir_agent.cli import FenrirAgent
+from fenrir_agent.model_registry import ModelRegistry, ModelRegistryError
+from fenrir_agent.model_profiles import BUILTIN_PROFILES
+from fenrir_agent.permissions import PermissionManager
+from fenrir_agent.sandbox import DockerSandbox
 
 
 class WorkspaceToolSafetyTests(TestCase):
@@ -66,15 +67,44 @@ class WorkspaceToolSafetyTests(TestCase):
     def test_agent_cannot_modify_workspace_configuration(self):
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            config = root / ".opencli" / "config.toml"
+            config = root / ".fenrir" / "config.toml"
             config.parent.mkdir()
             config.write_text("[models]", encoding="utf-8")
             tools = LocalWorkspaceTools(root, RuntimeConfig())
 
-            result = tools.write_text_file(".opencli/config.toml", "changed")
+            result = tools.write_text_file(".fenrir/config.toml", "changed")
 
             self.assertTrue(result["protected"])
             self.assertEqual(config.read_text(encoding="utf-8"), "[models]")
+
+    def test_protected_paths_reject_dotdot_and_nested_secret_aliases(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            (root / "sub").mkdir()
+            protected = root / ".env"
+            protected.write_text("SECRET=value", encoding="utf-8")
+            nested = root / "sub" / ".env.production"
+            nested.write_text("SECRET=nested", encoding="utf-8")
+            tools = LocalWorkspaceTools(root, RuntimeConfig())
+
+            self.assertTrue(tools.write_text_file("sub/../.env", "changed")["protected"])
+            self.assertTrue(tools.read_text_file("sub/.env.production")["protected"])
+            self.assertEqual(protected.read_text(encoding="utf-8"), "SECRET=value")
+
+    def test_atomic_write_does_not_follow_preexisting_temp_hardlink(self):
+        with TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory) / "workspace"
+            root.mkdir()
+            outside = Path(temporary_directory) / "outside.txt"
+            outside.write_text("safe", encoding="utf-8")
+            # Old predictable names must not affect the exclusive random temp file.
+            os.link(outside, root / "note.txt.fenrir-tmp")
+            tools = LocalWorkspaceTools(root, RuntimeConfig())
+
+            tools.write_text_file("note.txt", "inside")
+
+            self.assertEqual(outside.read_text(encoding="utf-8"), "safe")
+            self.assertEqual((root / "note.txt").read_text(encoding="utf-8"), "inside")
 
     def test_edit_requires_exactly_one_match(self):
         with TemporaryDirectory() as temporary_directory:
@@ -140,7 +170,7 @@ class WorkspaceToolSafetyTests(TestCase):
 
 class ModelRegistryTests(TestCase):
     def test_reasoning_command_validates_active_profile(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         profile = next(item for item in BUILTIN_PROFILES if item.key == "gpt-oss-20b")
         with patch.object(cli, "_refresh_context_profile", return_value=profile):
             self.assertEqual(cli.configure_reasoning("high"), "Reasoning level: high.")
@@ -191,16 +221,16 @@ class ModelRegistryTests(TestCase):
             self.assertEqual(model["reasoning_levels"], ["low", "medium", "high"])
 
     def test_context_bar_shows_no_model_until_inference_is_loaded(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         self.assertIn("No model loaded", cli.context_bar())
 
     def test_run_opens_without_starting_the_default_model(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         with (
             patch.object(cli, "clear"),
             patch.object(cli, "banner"),
             patch.object(cli, "get_session", return_value=object()),
-            patch("main.cli.get_styled_input", return_value="/exit"),
+            patch("fenrir_agent.cli.get_styled_input", return_value="/exit"),
             patch.object(cli, "init_engine") as initialize,
             patch("builtins.print"),
         ):
@@ -216,10 +246,10 @@ class ModelRegistryTests(TestCase):
                 self.loaded = (mode, quant)
                 return True, "loaded"
 
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.engine = FakeEngine()
         cli.quant = "api"
-        with patch("main.cli.loading_spinner"):
+        with patch("fenrir_agent.cli.loading_spinner"):
             self.assertTrue(cli.load_model("auto", show_picker=False))
         self.assertEqual(cli.engine.loaded, ("auto", "int4"))
 
@@ -232,17 +262,17 @@ class ModelRegistryTests(TestCase):
                 self.loaded = (mode, quant)
                 return True, "loaded"
 
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.engine = FakeEngine()
         with (
-            patch("main.cli.loading_spinner"),
+            patch("fenrir_agent.cli.loading_spinner"),
             patch.object(cli, "pick_quant", return_value="fp16"),
         ):
             self.assertTrue(cli.load_model("auto", show_picker=True))
         self.assertEqual(cli.engine.loaded, ("auto", "fp16"))
 
     def test_tools_off_command_rebuilds_runtime_in_chat_only_mode(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         with patch("builtins.print"):
             self.assertTrue(cli.handle_command("/tools-off"))
         self.assertFalse(cli.tools_enabled)
@@ -251,7 +281,7 @@ class ModelRegistryTests(TestCase):
         self.assertTrue(cli.tools_enabled)
 
     def test_auto_tool_routing_is_off_by_default_and_toggleable(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         self.assertFalse(cli.auto_tool_routing)
         with patch("builtins.print"):
             self.assertTrue(cli.handle_command("/tool-auto on"))
@@ -261,8 +291,8 @@ class ModelRegistryTests(TestCase):
         self.assertFalse(cli.auto_tool_routing)
 
     def test_prompt_session_erases_submitted_input_before_panel_render(self):
-        cli = OpenCLI(dry_run=True)
-        with patch("main.cli.PromptSession") as prompt_session:
+        cli = FenrirAgent(dry_run=True)
+        with patch("fenrir_agent.cli.PromptSession") as prompt_session:
             cli.get_session()
         self.assertTrue(prompt_session.call_args.kwargs["erase_when_done"])
 
@@ -277,7 +307,7 @@ class ModelRegistryTests(TestCase):
 
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.engine = Engine()
             cli.api_profiles = ApiProfileRegistry(root / "api-profiles.json")
             cli.permission_manager = PermissionManager(
@@ -309,7 +339,7 @@ class ModelRegistryTests(TestCase):
 
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.engine = Engine()
             cli.api_profiles = ApiProfileRegistry(root / "api-profiles.json")
             cli.permission_manager = PermissionManager(
@@ -345,7 +375,7 @@ class ModelRegistryTests(TestCase):
 
         with TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.engine = Engine()
             cli.api_profiles = ApiProfileRegistry(root / "api-profiles.json")
             cli.api_profiles.save("openrouter", "nvidia/model")
@@ -356,11 +386,11 @@ class ModelRegistryTests(TestCase):
             )
             with (
                 patch(
-                    "main.cli.OpenAICompatibleClient.list_models",
+                    "fenrir_agent.cli.OpenAICompatibleClient.list_models",
                     return_value=["nvidia/model"],
                 ),
                 patch(
-                    "main.cli.OpenAICompatibleClient.model_metadata",
+                    "fenrir_agent.cli.OpenAICompatibleClient.model_metadata",
                     return_value={"context": 131072, "max_tokens": 8192},
                 ),
             ):
@@ -429,7 +459,7 @@ class ToolsOffRuntimeTests(TestCase):
         self.assertEqual(result.removed_messages, 5)
         self.assertIn("Use Python 3.12", transcript)
         self.assertIn("turn 7", transcript)
-        self.assertIn("OPENCLI COMPACTED CONTEXT", transcript)
+        self.assertIn("FENRIR COMPACTED CONTEXT", transcript)
 
     def test_macro_compact_accepts_loaded_model_structured_summary(self):
         class Engine:
@@ -509,8 +539,8 @@ class ToolsOffRuntimeTests(TestCase):
 
 
 class DockerSandboxTests(TestCase):
-    @patch("main.sandbox.shutil.which", return_value="docker")
-    @patch("main.sandbox.subprocess.run")
+    @patch("fenrir_agent.sandbox.shutil.which", return_value="docker")
+    @patch("fenrir_agent.sandbox.subprocess.run")
     def test_docker_invocation_has_no_network_read_only_mount_and_no_shell(
         self, mocked_run, _which
     ):

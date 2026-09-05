@@ -2,9 +2,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from main.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, RuntimeConfig
-from main.engine import FileHandler
-from main.workspace_context import WorkspaceContext
+from fenrir_agent.agent_runtime import LocalWorkspaceTools, PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.engine import FileHandler
+from fenrir_agent.workspace_context import WorkspaceContext
 
 
 class WorkspaceContextTests(TestCase):

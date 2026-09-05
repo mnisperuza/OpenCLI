@@ -4,11 +4,16 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
-from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
-from main.api_profiles import ApiProfileRegistry
-from main.api_providers import OpenAICompatibleClient, PROVIDERS
+from fenrir_agent.agent_runtime import PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.api_profiles import ApiProfileRegistry
+from fenrir_agent.api_providers import (
+    OpenAICompatibleClient,
+    PROVIDERS,
+    _SameOriginRedirectHandler,
+)
 
 
 class FakeResponse:
@@ -22,14 +27,30 @@ class FakeResponse:
     def __exit__(self, *_args):
         return False
 
-    def read(self):
-        return self.payload
+    def read(self, size=-1):
+        if size is None or size < 0:
+            return self.payload
+        return self.payload[:size]
 
     def __iter__(self):
         return iter(self.lines)
 
 
 class ApiProviderClientTests(unittest.TestCase):
+    def test_provider_redirects_cannot_cross_origin_or_downgrade_https(self):
+        handler = _SameOriginRedirectHandler()
+        request = Request(
+            "https://provider.example/v1/models",
+            headers={"Authorization": "Bearer synthetic"},
+        )
+        for target in (
+            "https://other.example/v1/models",
+            "http://provider.example/v1/models",
+        ):
+            with self.subTest(target=target):
+                with self.assertRaises(URLError):
+                    handler.redirect_request(request, None, 302, "redirect", {}, target)
+
     def test_direct_providers_precede_optional_gateways(self):
         self.assertEqual(next(iter(PROVIDERS)), "groq")
         self.assertGreaterEqual(len(PROVIDERS), 15)
@@ -105,7 +126,7 @@ class ApiProviderClientTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 client = OpenAICompatibleClient(provider, "secret")
                 with patch(
-                    "main.api_providers.urlopen", return_value=FakeResponse(payload)
+                    "fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)
                 ) as call:
                     self.assertEqual(client.list_models(), ["provider-model"])
                 request = call.call_args.args[0]
@@ -125,7 +146,7 @@ class ApiProviderClientTests(unittest.TestCase):
             with self.subTest(provider=provider):
                 client = OpenAICompatibleClient(provider, "secret", "agent-model")
                 with patch(
-                    "main.api_providers.urlopen",
+                    "fenrir_agent.api_providers.safe_urlopen",
                     return_value=FakeResponse(lines=[b"data: [DONE]\\n"]),
                 ) as call:
                     list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
@@ -146,7 +167,7 @@ class ApiProviderClientTests(unittest.TestCase):
             definition.base_url_environment_variable, "LITELLM_BASE_URL"
         )
 
-    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    @patch.dict("fenrir_agent.api_providers.os.environ", {}, clear=True)
     def test_local_gateway_http_urls_are_allowed(self):
         self.assertEqual(
             OpenAICompatibleClient("freellmapi", "secret").base_url,
@@ -161,7 +182,7 @@ class ApiProviderClientTests(unittest.TestCase):
             "http://127.0.0.1:5001/v1",
         )
 
-    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    @patch.dict("fenrir_agent.api_providers.os.environ", {}, clear=True)
     def test_freellmapi_lists_only_models_ready_on_the_local_router(self):
         payload = json.dumps(
             {
@@ -181,7 +202,7 @@ class ApiProviderClientTests(unittest.TestCase):
         ).encode()
         client = OpenAICompatibleClient("freellmapi", "unified-key")
 
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)) as call:
             self.assertEqual(client.list_models(), ["auto", "deepseek-r1"])
 
         request = call.call_args.args[0]
@@ -194,7 +215,7 @@ class ApiProviderClientTests(unittest.TestCase):
         self.assertTrue(client.model_metadata("auto")["supports_tools"])
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {
             "FREELLMAPI_API_KEY": "dashboard-key",
             "FREELLMAPI_BASE_URL": "https://free.example/v1/",
@@ -209,13 +230,13 @@ class ApiProviderClientTests(unittest.TestCase):
             "https://free.example/v1",
         )
 
-    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    @patch.dict("fenrir_agent.api_providers.os.environ", {}, clear=True)
     def test_freellmapi_stream_uses_standard_chat_and_tool_contract(self):
         client = OpenAICompatibleClient("freellmapi", "unified-key", "auto:coding")
         tools = [{"type": "function", "function": {"name": "inspect_workspace"}}]
 
         with patch(
-            "main.api_providers.urlopen",
+            "fenrir_agent.api_providers.safe_urlopen",
             return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
         ) as call:
             list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
@@ -231,7 +252,7 @@ class ApiProviderClientTests(unittest.TestCase):
         self.assertEqual(body["tools"], tools)
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {"LITELLM_BASE_URL": "http://gateway.example/v1"},
         clear=True,
     )
@@ -240,7 +261,7 @@ class ApiProviderClientTests(unittest.TestCase):
             OpenAICompatibleClient("litellm", "secret")
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {"DS2API_BASE_URL": "https://deepseek.example/v1/"},
         clear=True,
     )
@@ -250,22 +271,22 @@ class ApiProviderClientTests(unittest.TestCase):
             "https://deepseek.example/v1",
         )
 
-    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    @patch.dict("fenrir_agent.api_providers.os.environ", {}, clear=True)
     def test_gateway_discovery_uses_shared_openai_path_and_bearer_auth(self):
         payload = json.dumps({"data": [{"id": "agent-model"}]}).encode()
         client = OpenAICompatibleClient("litellm", "gateway-secret")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)) as call:
             self.assertEqual(client.list_models(), ["agent-model"])
         request = call.call_args.args[0]
         self.assertEqual(request.full_url, "http://127.0.0.1:4000/models")
         self.assertEqual(request.get_header("Authorization"), "Bearer gateway-secret")
 
-    @patch.dict("main.api_providers.os.environ", {}, clear=True)
+    @patch.dict("fenrir_agent.api_providers.os.environ", {}, clear=True)
     def test_litellm_stream_uses_standard_chat_completions_contract(self):
         client = OpenAICompatibleClient("litellm", "gateway-secret", "claude-agent")
         tools = [{"type": "function", "function": {"name": "inspect_workspace"}}]
         with patch(
-            "main.api_providers.urlopen",
+            "fenrir_agent.api_providers.safe_urlopen",
             return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
         ) as call:
             list(client.stream_chat([{"role": "user", "content": "Inspect"}], tools))
@@ -281,7 +302,7 @@ class ApiProviderClientTests(unittest.TestCase):
         payload = json.dumps({"data": [{"id": "qwen-plus"}]}).encode()
         client = OpenAICompatibleClient("qwen", "secret")
 
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)) as call:
             self.assertEqual(client.list_models(), ["qwen-plus"])
 
         self.assertEqual(
@@ -291,13 +312,13 @@ class ApiProviderClientTests(unittest.TestCase):
         self.assertEqual(PROVIDERS["qwen"].environment_variable, "DASHSCOPE_API_KEY")
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {"QWEN_BASE_URL": "https://dashscope-us.aliyuncs.com/compatible-mode/v1/"},
     )
     def test_qwen_cloud_supports_regional_base_url(self):
         client = OpenAICompatibleClient("qwen", "secret", "qwen-plus")
         with patch(
-            "main.api_providers.urlopen",
+            "fenrir_agent.api_providers.safe_urlopen",
             return_value=FakeResponse(lines=[b"data: [DONE]\n"]),
         ) as call:
             list(client.stream_chat([], []))
@@ -308,7 +329,7 @@ class ApiProviderClientTests(unittest.TestCase):
         )
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {"DASHSCOPE_API_KEY": "", "QWEN_API_KEY": "alias-secret"},
         clear=False,
     )
@@ -318,7 +339,7 @@ class ApiProviderClientTests(unittest.TestCase):
         )
 
     @patch.dict(
-        "main.api_providers.os.environ",
+        "fenrir_agent.api_providers.os.environ",
         {"QWEN_BASE_URL": "http://unsafe.example/v1"},
     )
     def test_qwen_cloud_rejects_insecure_base_url(self):
@@ -354,7 +375,7 @@ class ApiProviderClientTests(unittest.TestCase):
             }
         ).encode()
         client = OpenAICompatibleClient("openrouter", "secret")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)) as call:
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)) as call:
             self.assertEqual(client.list_models(), ["tool/model"])
         request = call.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer secret")
@@ -374,7 +395,7 @@ class ApiProviderClientTests(unittest.TestCase):
             }
         ).encode()
         client = OpenAICompatibleClient("openrouter", "secret")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)):
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)):
             client.list_models()
 
         self.assertEqual(
@@ -395,7 +416,7 @@ class ApiProviderClientTests(unittest.TestCase):
             }
         ).encode()
         client = OpenAICompatibleClient("groq", "secret")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(payload)):
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(payload)):
             client.list_models()
 
         self.assertEqual(client.model_metadata("nested/model")["context"], 200000)
@@ -409,7 +430,7 @@ class ApiProviderClientTests(unittest.TestCase):
             b"data: [DONE]\n",
         ]
         client = OpenAICompatibleClient("groq", "secret", "model")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(lines=lines)):
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=lines)):
             events = list(client.stream_chat([], []))
         self.assertEqual(events[0], {"type": "token", "content": "Hi "})
         self.assertEqual(events[1]["calls"][0]["id"], "call_1")
@@ -425,7 +446,7 @@ class ApiProviderClientTests(unittest.TestCase):
             b"data: [DONE]\n",
         ]
         client = OpenAICompatibleClient("groq", "secret", "model")
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(lines=lines)):
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=lines)):
             events = list(client.stream_chat([], []))
         self.assertEqual(
             events,
@@ -436,7 +457,7 @@ class ApiProviderClientTests(unittest.TestCase):
         client = OpenAICompatibleClient("groq", "secret", "model")
         client.max_output_tokens = 2048
         with patch(
-            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+            "fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
         ) as call:
             list(client.stream_chat([], []))
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
@@ -447,7 +468,7 @@ class ApiProviderClientTests(unittest.TestCase):
         client.reasoning_control = "api_parameter"
         client.reasoning_effort = "high"
         with patch(
-            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+            "fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
         ) as call:
             list(client.stream_chat([], []))
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
@@ -457,7 +478,7 @@ class ApiProviderClientTests(unittest.TestCase):
         client = OpenAICompatibleClient("groq", "secret", "model")
         client.reasoning_effort = "high"
         with patch(
-            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+            "fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
         ) as call:
             list(client.stream_chat([], []))
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
@@ -468,7 +489,7 @@ class ApiProviderClientTests(unittest.TestCase):
         choice = {"type": "function", "function": {"name": "react_dispatch"}}
         tools = [{"type": "function", "function": {"name": "react_dispatch"}}]
         with patch(
-            "main.api_providers.urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
+            "fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=[b"data: [DONE]\n"])
         ) as call:
             list(client.stream_chat([], tools, choice))
         body = json.loads(call.call_args.args[0].data.decode("utf-8"))
@@ -491,7 +512,7 @@ class ApiProviderClientTests(unittest.TestCase):
         ])
 
         with patch(
-            "main.api_providers.urlopen", side_effect=[rejection, accepted]
+            "fenrir_agent.api_providers.safe_urlopen", side_effect=[rejection, accepted]
         ) as call:
             events = list(client.stream_chat([], tools, choice))
 
@@ -509,7 +530,7 @@ class ApiProviderClientTests(unittest.TestCase):
         ]
         client = OpenAICompatibleClient("groq", "secret", "model")
         client.max_stream_chars = 5
-        with patch("main.api_providers.urlopen", return_value=FakeResponse(lines=lines)):
+        with patch("fenrir_agent.api_providers.safe_urlopen", return_value=FakeResponse(lines=lines)):
             events = list(client.stream_chat([], []))
 
         self.assertEqual(events[0], {"type": "token", "content": "abcde"})

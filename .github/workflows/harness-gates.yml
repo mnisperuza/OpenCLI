@@ -38,7 +38,7 @@ jobs:
           "cryptography>=44,<48"
           "pytest>=8,<10"
       - name: Compile runtime
-        run: python -m compileall -q main
+        run: python -m compileall -q fenrir_agent
       - name: Run enterprise harness gates
         run: python -m pytest tests/test_enterprise_harness.py -q
 
@@ -51,10 +51,10 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install OpenCLI and test runner
+      - name: Install Fenrir Agent and test runner
         run: python -m pip install -e . "pytest>=8,<10"
       - name: Compile runtime
-        run: python -m compileall -q main
+        run: python -m compileall -q fenrir_agent
       - name: Run full regression suite
         run: python -m pytest -q
 

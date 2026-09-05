@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, mock_open, patch
 
-from main.engine import InputPayload, OpenCLIEngine
+from fenrir_agent.engine import InputPayload, FenrirAgentEngine
 
 
 class FakeResponse:
@@ -31,7 +31,7 @@ class NeverInterrupted:
 
 class LlamaCppStreamTests(TestCase):
     def test_stop_generation_closes_local_stream_and_cancels_api(self):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.interrupt_handler = Mock()
         engine.api_client = Mock()
         engine._response_lock = threading.Lock()
@@ -43,10 +43,10 @@ class LlamaCppStreamTests(TestCase):
         engine.api_client.cancel.assert_called_once_with()
         engine._active_generation_response.close.assert_called_once_with()
 
-    @patch("main.engine.urlopen")
+    @patch("fenrir_agent.engine.urlopen")
     def test_native_reasoning_uses_llama_chat_template_kwargs(self, mocked_urlopen):
         mocked_urlopen.return_value = FakeResponse([])
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.interrupt_handler = NeverInterrupted()
         engine._current_response = ""
         engine.reasoning_control = "chat_template_kwargs"
@@ -64,16 +64,16 @@ class LlamaCppStreamTests(TestCase):
         )
 
     @patch.dict(
-        "main.engine.os.environ",
-        {"OPENCLI_LLAMA_CPP_STARTUP_TIMEOUT": "1"},
+        "fenrir_agent.engine.os.environ",
+        {"FENRIR_LLAMA_CPP_STARTUP_TIMEOUT": "1"},
     )
-    @patch("main.engine.open", new_callable=mock_open)
-    @patch("main.engine.subprocess.Popen")
-    @patch("main.engine.time.monotonic", side_effect=[10.0, 11.0])
+    @patch("fenrir_agent.engine.open", new_callable=mock_open)
+    @patch("fenrir_agent.engine.subprocess.Popen")
+    @patch("fenrir_agent.engine.time.monotonic", side_effect=[10.0, 11.0])
     def test_llama_cpp_startup_times_out_and_stops_process(
         self, _monotonic, mocked_popen, _open
     ):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine._llama_process = None
         engine._llama_log = None
         engine._llama_log_path = None
@@ -93,10 +93,10 @@ class LlamaCppStreamTests(TestCase):
         self.assertIn("still loading", message)
         engine.shutdown.assert_called_once_with()
 
-    @patch("main.engine.open", new_callable=mock_open)
-    @patch("main.engine.subprocess.Popen")
+    @patch("fenrir_agent.engine.open", new_callable=mock_open)
+    @patch("fenrir_agent.engine.subprocess.Popen")
     def test_llama_cpp_startup_can_be_cancelled(self, mocked_popen, _open):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine._llama_process = None
         engine._llama_log = None
         engine._llama_log_path = None
@@ -116,10 +116,10 @@ class LlamaCppStreamTests(TestCase):
         self.assertEqual(message, "llama.cpp startup cancelled.")
         engine.shutdown.assert_called_once_with()
 
-    @patch("main.engine.open", new_callable=mock_open)
-    @patch("main.engine.subprocess.Popen")
+    @patch("fenrir_agent.engine.open", new_callable=mock_open)
+    @patch("fenrir_agent.engine.subprocess.Popen")
     def test_llama_cpp_download_failure_stops_startup(self, mocked_popen, _open):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine._llama_process = None
         engine._llama_log = None
         engine._llama_log_path = None
@@ -141,7 +141,7 @@ class LlamaCppStreamTests(TestCase):
         engine.shutdown.assert_called_once_with()
 
     def test_stop_generation_terminates_only_in_progress_server_startup(self):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.interrupt_handler = Mock()
         engine.api_client = None
         engine._response_lock = threading.Lock()
@@ -154,7 +154,7 @@ class LlamaCppStreamTests(TestCase):
         engine.shutdown.assert_called_once_with()
 
     def test_load_model_resets_and_clears_cancellation_state(self):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.interrupt_handler = Mock()
         engine._model_loading = False
         engine._load_model_impl = Mock(return_value=(True, "ready"))
@@ -165,8 +165,8 @@ class LlamaCppStreamTests(TestCase):
         engine.interrupt_handler.reset.assert_called_once_with()
         self.assertFalse(engine._model_loading)
 
-    @patch("main.engine.os.name", "nt")
-    @patch("main.engine.subprocess.run")
+    @patch("fenrir_agent.engine.os.name", "nt")
+    @patch("fenrir_agent.engine.subprocess.run")
     def test_endserver_stops_unmanaged_local_llama_server(self, mocked_run):
         mocked_run.side_effect = [
             SimpleNamespace(
@@ -175,7 +175,7 @@ class LlamaCppStreamTests(TestCase):
             SimpleNamespace(stdout='"llama-server.exe","4321","Console","1","200 K"\n'),
             SimpleNamespace(stdout=""),
         ]
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
 
         engine._stop_unmanaged_windows_llama_cpp_server()
 
@@ -185,7 +185,7 @@ class LlamaCppStreamTests(TestCase):
         )
 
     def test_stale_server_is_stopped_before_default_model_starts(self):
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.shutdown = lambda: None
         engine._llama_cpp_is_ready = lambda _url: False
         engine._llama_cpp_model_ids = lambda _url: ["LiquidAI/LFM2.5-8B-A1B-GGUF"]
@@ -204,26 +204,26 @@ class LlamaCppStreamTests(TestCase):
 
     def test_model_identity_match_accepts_quantized_hugging_face_id(self):
         self.assertTrue(
-            OpenCLIEngine._llama_cpp_model_matches(
+            FenrirAgentEngine._llama_cpp_model_matches(
                 "LiquidAI/LFM2.5-8B-A1B-GGUF",
                 "LiquidAI/LFM2.5-8B-A1B-GGUF:Q4_K_M",
             )
         )
         self.assertFalse(
-            OpenCLIEngine._llama_cpp_model_matches(
+            FenrirAgentEngine._llama_cpp_model_matches(
                 "mistralai/Ministral-3-14B-Instruct-2512-GGUF",
                 "LiquidAI/LFM2.5-8B-A1B-GGUF:Q4_K_M",
             )
         )
 
-    @patch("main.engine.platform.system", return_value="Darwin")
-    @patch("main.engine.shutil.which", return_value=None)
+    @patch("fenrir_agent.engine.platform.system", return_value="Darwin")
+    @patch("fenrir_agent.engine.shutil.which", return_value=None)
     def test_macos_uses_homebrew_llama_cpp_guidance(self, _which, _system):
         self.assertEqual(
-            OpenCLIEngine._llama_cpp_install_hint(), "brew install llama.cpp"
+            FenrirAgentEngine._llama_cpp_install_hint(), "brew install llama.cpp"
         )
 
-    @patch("main.engine.urlopen")
+    @patch("fenrir_agent.engine.urlopen")
     def test_structured_tool_call_delta_becomes_adapter_protocol(self, mocked_urlopen):
         mocked_urlopen.return_value = FakeResponse(
             [
@@ -262,7 +262,7 @@ class LlamaCppStreamTests(TestCase):
                 },
             ]
         )
-        engine = object.__new__(OpenCLIEngine)
+        engine = object.__new__(FenrirAgentEngine)
         engine.interrupt_handler = NeverInterrupted()
         engine._current_response = ""
 

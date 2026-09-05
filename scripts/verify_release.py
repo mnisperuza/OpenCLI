@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-VERSION_FILE = PROJECT_ROOT / "main" / "_version.py"
+VERSION_FILE = PROJECT_ROOT / "fenrir_agent" / "_version.py"
 VERSION_PATTERN = re.compile(r'^__version__\s*=\s*"(?P<version>[^"\s]+)"\s*$', re.MULTILINE)
 
 
@@ -23,7 +23,7 @@ def package_version() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tag", required=True, help="Release tag, for example v1.7.0")
+    parser.add_argument("--tag", required=True, help="Release tag, for example v2.0.0")
     args = parser.parse_args()
 
     expected_tag = f"v{package_version()}"

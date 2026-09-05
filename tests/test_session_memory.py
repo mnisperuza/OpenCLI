@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from main.session_memory import SessionMemoryStore
+from fenrir_agent.session_memory import SessionMemoryStore
 
 
 class SessionMemoryStoreTests(TestCase):

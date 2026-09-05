@@ -2,9 +2,9 @@ import tomllib
 from pathlib import Path
 from unittest import TestCase
 
-from main import __version__
-from main.cli import OpenCLI
-import opencli
+from fenrir_agent import __version__
+from fenrir_agent.cli import FenrirAgent
+import fenrir_agent
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTests(TestCase):
     def test_cli_uses_package_version(self):
-        self.assertEqual(OpenCLI.VERSION, __version__)
+        self.assertEqual(FenrirAgent.VERSION, __version__)
 
     def test_changelog_current_release_matches_package_version(self):
         content = (PROJECT_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -34,18 +34,18 @@ class PackagingTests(TestCase):
         self.assertIn("version", project["dynamic"])
         self.assertEqual(
             metadata["tool"]["setuptools"]["dynamic"]["version"]["attr"],
-            "main._version.__version__",
+            "fenrir_agent._version.__version__",
         )
-        self.assertEqual(project["name"], "opencli")
+        self.assertEqual(project["name"], "fenrir-agent")
         self.assertEqual(project["license"], "Apache-2.0")
         self.assertEqual(project["readme"], "README.md")
-        self.assertEqual(project["scripts"]["opencli"], "opencli.cli:main")
-        self.assertTrue(all("OpenCLI" in url for url in project["urls"].values()))
+        self.assertEqual(project["scripts"]["fenrir"], "fenrir_agent.cli:main")
+        self.assertIn("mnisperuza/OpenCLI", project["urls"]["Repository"])
 
     def test_public_library_namespace_exposes_stable_entry_points(self):
-        self.assertEqual(opencli.__version__, __version__)
-        self.assertIs(opencli.OpenCLI, OpenCLI)
-        self.assertTrue(hasattr(opencli, "ModelBackend"))
+        self.assertEqual(fenrir_agent.__version__, __version__)
+        self.assertIs(fenrir_agent.FenrirAgent, FenrirAgent)
+        self.assertTrue(hasattr(fenrir_agent, "ModelBackend"))
 
     def test_legacy_site_is_not_shipped_as_product_documentation(self):
         for name in ("index.html", "docs.html", "about.html", "privacy.html", "terms.html"):
@@ -76,8 +76,10 @@ class PackagingTests(TestCase):
         )
         self.assertIn(install_command, shell)
         self.assertIn(install_command, powershell)
-        self.assertNotIn("uv tool install --upgrade opencli", shell)
-        self.assertNotIn("uv tool install --upgrade opencli", powershell)
+        self.assertNotIn("uv tool install --upgrade fenrir-agent", shell)
+        self.assertNotIn("uv tool install --upgrade fenrir-agent", powershell)
+        self.assertIn("Run: fenrir", shell)
+        self.assertIn("Run: fenrir", powershell)
         self.assertIn("astral.sh/uv/install.sh", shell)
         self.assertIn("astral.sh/uv/install.ps1", powershell)
 

@@ -1,13 +1,13 @@
-# Releasing OpenCLI
+# Releasing Fenrir Agent
 
-OpenCLI releases are immutable version tags. The release workflow verifies the
+Fenrir Agent releases are immutable version tags. The release workflow verifies the
 tag, runs the full suite, builds the source distribution and wheel, validates
 metadata, installs the built wheel in a clean environment, writes SHA-256
 checksums, creates GitHub Release assets, and then publishes to PyPI.
 
 ## One-time repository setup
 
-1. In PyPI, create or claim the `opencli` project under the intended owner.
+1. In PyPI, create or claim the `fenrir-agent` project under the intended owner.
 2. Configure PyPI Trusted Publishing for this GitHub repository, workflow file
    `.github/workflows/release.yml`, and the `pypi` GitHub environment.
 3. In GitHub, create the protected `pypi` environment. Require approval if a
@@ -20,14 +20,14 @@ workflow's short-lived GitHub identity token for publication authority.
 
 ## Release procedure
 
-1. Update `main/_version.py` and move completed items into `CHANGELOG.md`.
+1. Update `fenrir_agent/_version.py` and move completed items into `CHANGELOG.md`.
 2. Run `python -m pytest -q`, `python -m build`, `python -m twine check dist/*`,
    and `python scripts/package_smoke.py dist` locally.
 3. Commit the release changes and create an annotated tag matching the version:
 
    ```bash
-   git tag -a v1.7.0 -m "OpenCLI 1.7.0"
-   git push origin v1.7.0
+   git tag -a v2.0.0 -m "Fenrir Agent 2.0.0"
+   git push origin v2.0.0
    ```
 
 4. Approve the `pypi` environment when GitHub asks. Verify the GitHub Release,

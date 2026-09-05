@@ -1,4 +1,4 @@
-# OpenCLI Enterprise Harness Plan
+# Fenrir Agent Enterprise Harness Plan
 
 Status: core implementation complete; advanced orchestration gated, version 3
 
@@ -41,7 +41,7 @@ and state replay/fork UI. These are not silently enabled by the core migration.
 
 ## North Star
 
-OpenCLI becomes a deterministic control plane around non-deterministic models.
+Fenrir Agent becomes a deterministic control plane around non-deterministic models.
 The model proposes actions; the harness owns state, transitions, policy,
 execution, evidence, memory, recovery, and completion.
 
@@ -55,7 +55,7 @@ typed outcomes and evidence.
 
 ## Existing Baseline
 
-OpenCLI already has foundations that should be hardened rather than rebuilt:
+Fenrir Agent already has foundations that should be hardened rather than rebuilt:
 
 - explicit ReAct phases, step budgets, repeat detection, and failure limits;
 - mandatory `/react on` dispatch and critique transitions;
@@ -499,7 +499,7 @@ opaque score.
 
 ### Defer behind an interface and decision gate
 
-- LangGraph: compare against OpenCLI's checkpoint protocol after durable-state
+- LangGraph: compare against Fenrir Agent's checkpoint protocol after durable-state
   contracts exist. Adopt only if pause/resume, pending writes, replay, forks,
   or operational maintenance are clearly better than the custom runtime.
 - LlamaIndex ReActAgent: experimental compatibility backend only; do not make it

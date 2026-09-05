@@ -9,7 +9,7 @@ class SourceEncodingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         markers = ("â", "Â", "Ã", "ðŸ")
 
-        for relative_path in ("main/cli.py", "main/engine.py"):
+        for relative_path in ("fenrir_agent/cli.py", "fenrir_agent/engine.py"):
             source = (root / relative_path).read_text(encoding="utf-8")
             found = [marker for marker in markers if marker in source]
             self.assertFalse(

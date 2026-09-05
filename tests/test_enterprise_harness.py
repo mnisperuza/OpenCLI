@@ -8,8 +8,8 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from urllib.error import URLError
 
-from main.agent_runtime import PydanticAgentRuntime, RuntimeConfig
-from main.harness_contracts import (
+from fenrir_agent.agent_runtime import PydanticAgentRuntime, RuntimeConfig
+from fenrir_agent.harness_contracts import (
     ErrorCode,
     MemoryRecord,
     RunLifecycle,
@@ -19,20 +19,20 @@ from main.harness_contracts import (
     TrustClass,
     new_id,
 )
-from main.provider_reliability import (
+from fenrir_agent.provider_reliability import (
     ProviderReliabilityController,
     TransportRetryPolicy,
 )
-from main.react_loop import ReactLoopController, ReactLoopPolicy, ReactPhase
-from main.run_ledger import RunLedger
-from main.tool_runtime import (
+from fenrir_agent.react_loop import ReactLoopController, ReactLoopPolicy, ReactPhase
+from fenrir_agent.run_ledger import RunLedger
+from fenrir_agent.tool_runtime import (
     CompletionValidator,
     DeterministicReadBatchExecutor,
     default_tool_registry,
     default_toolset_registry,
     mutation_receipt,
 )
-from main.workspace_context import WorkspaceContext
+from fenrir_agent.workspace_context import WorkspaceContext
 
 
 class HarnessContractTests(TestCase):

@@ -6,12 +6,12 @@ from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
-from main.agent_runtime import LocalWorkspaceTools, RuntimeConfig
-from main.api_providers import OpenAICompatibleClient
-from main.interfaces import ModelDescriptor, PermissionRequestData, ToolDescriptor
-from main.model_registry import ModelRegistry
-from main.sandbox import DockerSandbox
-from main.web_retrieval import WebRetriever
+from fenrir_agent.agent_runtime import LocalWorkspaceTools, RuntimeConfig
+from fenrir_agent.api_providers import OpenAICompatibleClient
+from fenrir_agent.interfaces import ModelDescriptor, PermissionRequestData, ToolDescriptor
+from fenrir_agent.model_registry import ModelRegistry
+from fenrir_agent.sandbox import DockerSandbox
+from fenrir_agent.web_retrieval import WebRetriever
 
 
 class ReleaseOneFiveRegressionTests(TestCase):
@@ -49,8 +49,8 @@ class ReleaseOneFiveRegressionTests(TestCase):
             with self.assertRaisesRegex(ValueError, "trusted workspace"):
                 tools.read_text_file("../outside.txt")
 
-    @patch("main.sandbox.shutil.which", return_value="docker")
-    @patch("main.sandbox.subprocess.run")
+    @patch("fenrir_agent.sandbox.shutil.which", return_value="docker")
+    @patch("fenrir_agent.sandbox.subprocess.run")
     def test_docker_command_remains_network_isolated(self, mocked_run, _which):
         mocked_run.side_effect = [
             SimpleNamespace(returncode=0),

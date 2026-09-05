@@ -6,23 +6,23 @@ from unittest.mock import patch
 from textual.containers import VerticalScroll
 from textual.widgets import Button, Collapsible, Footer, Header, Markdown, OptionList, Static
 
-from main.cli import OpenCLI, main
-from main.session_memory import SessionMemoryStore
-from main.task_plan import TaskPlanItem, TaskPlanStore
-from main.tui import (
-    ACTIVITY_LABELS, ChoiceScreen, ConfirmScreen, FormScreen, OpenCLITui,
+from fenrir_agent.cli import FenrirAgent, main
+from fenrir_agent.session_memory import SessionMemoryStore
+from fenrir_agent.task_plan import TaskPlanItem, TaskPlanStore
+from fenrir_agent.tui import (
+    ACTIVITY_LABELS, ChoiceScreen, ConfirmScreen, FormScreen, FenrirAgentTui,
     PermissionScreen,
 )
-from main.permissions import PermissionDecision, PermissionRequest
-from main.ui_events import AgentEvent
+from fenrir_agent.permissions import PermissionDecision, PermissionRequest
+from fenrir_agent.ui_events import AgentEvent
 
 
-class OpenCLITuiTests(IsolatedAsyncioTestCase):
+class FenrirAgentTuiTests(IsolatedAsyncioTestCase):
     async def test_escape_during_generation_requests_transport_cancel(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             with patch.object(cli, "_request_generation_stop") as stop:
                 async with app.run_test() as pilot:
                     app._set_busy(True, "Generating")
@@ -38,9 +38,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_escape_during_model_load_requests_hard_stop(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             with patch.object(cli, "_request_generation_stop") as stop:
                 async with app.run_test() as pilot:
                     app._set_busy(True, "Loading model", "model_loading")
@@ -51,9 +51,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_escape_on_permission_dialog_stops_generation(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             request = PermissionRequest(
                 category="file_write",
                 action="write file",
@@ -72,9 +72,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_dynamic_activity_stops_on_first_token(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 self.assertGreaterEqual(len(ACTIVITY_LABELS), 30)
                 app._start_generation_activity()
@@ -94,9 +94,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_real_activity_state_overrides_random_label(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test():
                 app._start_generation_activity()
                 app._handle_event(AgentEvent("tool", name="read_text_file"))
@@ -105,9 +105,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_mount_shows_agent_controls_and_context(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 await pilot.pause()
                 state = str(app.query_one("#status-line").render())
@@ -117,9 +117,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_live_events_update_response_and_inspector(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app._begin_assistant()
                 app._handle_event(AgentEvent("token", "Hello"))
@@ -130,9 +130,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_react_state_updates_one_progress_card(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app._begin_assistant()
                 app._handle_event(
@@ -148,9 +148,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_final_response_mounts_after_tool_trace(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app._begin_assistant()
                 app._handle_event(AgentEvent("token", "Planning"))
@@ -172,9 +172,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_user_scroll_disables_follow_until_latest_action(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test(size=(100, 24)) as pilot:
                 for index in range(40):
                     app._mount_message(f"History {index}", "event-card")
@@ -196,9 +196,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_file_preview_treats_code_as_text_not_markup(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app._handle_event(
                     AgentEvent(
@@ -220,16 +220,16 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
                 self.assertTrue(preview.has_class("change-card"))
 
     def test_diff_preview_uses_line_backgrounds(self):
-        preview = OpenCLITui._diff_preview("+added\n-removed\n context\n")
+        preview = FenrirAgentTui._diff_preview("+added\n-removed\n context\n")
         styles = [str(span.style) for span in preview.spans]
         self.assertTrue(any("on #10261d" in style for style in styles))
         self.assertTrue(any("on #2a1419" in style for style in styles))
 
     async def test_permission_escape_denies(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             decisions = []
             request = PermissionRequest("file_write", "edit", "a.py", "test", Path.cwd())
             async with app.run_test() as pilot:
@@ -241,9 +241,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_buttonless_permission_defaults_to_deny_on_enter(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             decisions = []
             request = PermissionRequest("file_write", "edit", "a.py", "test", Path.cwd())
             async with app.run_test() as pilot:
@@ -256,9 +256,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_buttonless_form_and_confirmation_use_keyboard(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             forms = []
             confirms = []
             async with app.run_test() as pilot:
@@ -277,9 +277,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_form_save_has_terminal_safe_shortcuts_and_enter_fallback(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             saved = []
             async with app.run_test() as pilot:
                 app.push_screen(
@@ -298,9 +298,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_single_stream_has_no_side_panes_or_persistent_buttons(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test(size=(70, 28)) as pilot:
                 await pilot.pause()
                 self.assertEqual(len(app.query("#plan-pane")), 0)
@@ -312,9 +312,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_model_manager_exposes_profile_crud_inside_tui(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app.action_models()
                 await pilot.pause()
@@ -329,9 +329,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_enter_submits_while_shift_enter_adds_line(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             with patch.object(
                 cli,
                 "stream_turn",
@@ -357,9 +357,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_slash_autocomplete_filters_and_completes_existing_command(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 prompt = app.query_one("#prompt")
                 prompt.text = "/cont"
@@ -374,9 +374,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_thinking_updates_one_collapsed_provider_summary(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app._begin_assistant()
                 app._handle_event(AgentEvent("thinking", "Checking constraints. "))
@@ -390,9 +390,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_plan_is_one_inline_card(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 app.plan_items = [TaskPlanItem("one", "Inspect workspace", "in_progress")]
                 app._refresh_plan()
@@ -407,9 +407,9 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
     async def test_timeline_mounts_are_windowed_for_long_sessions(self):
         with TemporaryDirectory() as directory:
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.session_memory = SessionMemoryStore(Path.cwd(), Path(directory) / "sessions")
-            app = OpenCLITui(cli, state_root=Path(directory) / "plans")
+            app = FenrirAgentTui(cli, state_root=Path(directory) / "plans")
             async with app.run_test() as pilot:
                 for index in range(app.MAX_MOUNTED_WIDGETS + 20):
                     app._mount_message(f"event {index}", "event-card")
@@ -421,40 +421,40 @@ class OpenCLITuiTests(IsolatedAsyncioTestCase):
 
 class TuiCommandTests(TestCase):
     def test_think_command_keeps_prompt_and_enables_thinking(self):
-        prompt, think_mode = OpenCLITui._parse_think_command("/think inspect this")
+        prompt, think_mode = FenrirAgentTui._parse_think_command("/think inspect this")
         self.assertEqual(prompt, "inspect this")
         self.assertTrue(think_mode)
 
     def test_normal_prompt_does_not_enable_thinking(self):
-        prompt, think_mode = OpenCLITui._parse_think_command("inspect this")
+        prompt, think_mode = FenrirAgentTui._parse_think_command("inspect this")
         self.assertEqual(prompt, "inspect this")
         self.assertFalse(think_mode)
 
     def test_cli_launches_textual_app_only_when_requested(self):
-        cli = OpenCLI(dry_run=True)
-        with patch("main.tui.OpenCLITui") as tui:
+        cli = FenrirAgent(dry_run=True)
+        with patch("fenrir_agent.tui.FenrirAgentTui") as tui:
             cli.run_tui()
         tui.assert_called_once_with(cli, api_start=False)
         tui.return_value.run.assert_called_once_with()
 
     def test_textual_is_default_and_cli_flag_keeps_classic_interface(self):
         with (
-            patch("main.cli.WorkspaceTrust.confirm", return_value=True),
-            patch("main.cli.OpenCLI") as opencli,
-            patch("sys.argv", ["opencli"]),
+            patch("fenrir_agent.cli.WorkspaceTrust.confirm", return_value=True),
+            patch("fenrir_agent.cli.FenrirAgent") as fenrir,
+            patch("sys.argv", ["fenrir"]),
         ):
             main()
-        opencli.return_value.run_tui.assert_called_once_with(api_start=False)
-        opencli.return_value.run.assert_not_called()
+        fenrir.return_value.run_tui.assert_called_once_with(api_start=False)
+        fenrir.return_value.run.assert_not_called()
 
         with (
-            patch("main.cli.WorkspaceTrust.confirm", return_value=True),
-            patch("main.cli.OpenCLI") as opencli,
-            patch("sys.argv", ["opencli", "--cli"]),
+            patch("fenrir_agent.cli.WorkspaceTrust.confirm", return_value=True),
+            patch("fenrir_agent.cli.FenrirAgent") as fenrir,
+            patch("sys.argv", ["fenrir", "--cli"]),
         ):
             main()
-        opencli.return_value.run.assert_called_once_with(api_start=False)
-        opencli.return_value.run_tui.assert_not_called()
+        fenrir.return_value.run.assert_called_once_with(api_start=False)
+        fenrir.return_value.run_tui.assert_not_called()
 
     def test_agent_event_normalizes_chunks(self):
         event = AgentEvent.from_chunk(
@@ -510,7 +510,7 @@ class TuiCommandTests(TestCase):
             def export_transcript():
                 return ""
 
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         cli.engine = Engine()
         cli.agent_runtime = Runtime()
         cli.interrupt_handler = SimpleNamespace(reset=lambda: None)

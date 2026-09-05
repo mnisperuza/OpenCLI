@@ -2,8 +2,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
-from main.engine import FileHandler
-from main.permissions import PermissionDecision, PermissionManager
+from fenrir_agent.engine import FileHandler
+from fenrir_agent.permissions import PermissionDecision, PermissionManager
 
 
 class PermissionManagerTests(TestCase):

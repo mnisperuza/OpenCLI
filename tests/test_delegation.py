@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from threading import Event
 from unittest import TestCase
 
-from main.delegation import DelegationManager
+from fenrir_agent.delegation import DelegationManager
 
 
 class DelegationManagerTests(TestCase):

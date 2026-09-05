@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and support
+    url: https://github.com/mnisperuza/OpenCLI/discussions
+    about: Ask setup and workflow questions in Discussions.
+  - name: Security vulnerability
+    url: mailto:mnisperuza1102@gmail.com
+    about: Report security concerns privately. Do not create a public issue.

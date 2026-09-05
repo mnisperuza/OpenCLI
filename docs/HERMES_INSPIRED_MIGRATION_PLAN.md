@@ -1,9 +1,9 @@
-# Hermes-Inspired OpenCLI Migration Plan
+# Hermes-Inspired Fenrir Agent Migration Plan
 
 ## Goal
 
-Strengthen OpenCLI's local-first coding harness by adapting small, proven
-patterns from Hermes Agent. OpenCLI keeps its own Textual UI, llama.cpp
+Strengthen Fenrir Agent's local-first coding harness by adapting small, proven
+patterns from Hermes Agent. Fenrir Agent keeps its own Textual UI, llama.cpp
 integration, provider registry, permission model, and durable run ledger.
 
 This plan is command-first. Capabilities are visible, inspectable, and changed
@@ -11,14 +11,14 @@ through slash commands; no new button-heavy workflow is introduced.
 
 ## Source Boundary
 
-Hermes Agent is MIT licensed. Prefer independent OpenCLI implementations based
+Hermes Agent is MIT licensed. Prefer independent Fenrir Agent implementations based
 on its public architecture. If source is copied or adapted directly, preserve
 the relevant copyright and MIT license notice. Do not import its gateway,
 desktop, billing, bot, voice, or cloud-platform stack.
 
 ## Completed Foundation
 
-| OpenCLI capability | Command surface | Status |
+| Fenrir Agent capability | Command surface | Status |
 | --- | --- | --- |
 | FTS5 durable-memory recall | `/memory search QUERY` | Complete |
 | Model-accessible trusted memory recall | `search_memory` tool | Complete |
@@ -38,7 +38,7 @@ model cannot re-enable it.
 ## Phase 2 — Portable Skills (Foundation Complete)
 
 **Why now:** Hermes' strongest reusable concept is procedural skills stored as
-small `SKILL.md` directories. This gives OpenCLI repeatable workflows without
+small `SKILL.md` directories. This gives Fenrir Agent repeatable workflows without
 forcing every capability into the system prompt.
 
 ### Command design
@@ -56,8 +56,8 @@ forcing every capability into the system prompt.
 ### Implementation shape
 
 - Add `main/skills.py` with a strict `SkillManifest` and bounded loader.
-- Read only `SKILL.md` from two roots: workspace `.opencli/skills/` and user
-  `~/.opencli/skills/`.
+- Read only `SKILL.md` from two roots: workspace `.fenrir/skills/` and user
+  `~/.fenrir/skills/`.
 - Parse small frontmatter fields: `name`, `description`, `version`, and optional
   `platforms`.
 - Treat loaded skill text as untrusted reference material, never as higher
@@ -83,7 +83,7 @@ review, and archival controls are implemented.
 **Status:** Recovery foundation complete.
 
 **Why:** Hermes separates retry, empty-response handling, iteration budgets,
-and verification evidence. OpenCLI already has the run ledger and permissions
+and verification evidence. Fenrir Agent already has the run ledger and permissions
 needed to add this cleanly.
 
 ### Command design
@@ -132,7 +132,7 @@ replay and should not be mixed with tool-effect recovery.
 
 ## Phase 4 — Sandbox Provider Contract
 
-**Why:** OpenCLI already supports Docker and E2B. Hermes' provider-registry
+**Why:** Fenrir Agent already supports Docker and E2B. Hermes' provider-registry
 pattern can make those backends consistent without adding every Hermes backend.
 
 ### Command design
@@ -197,7 +197,7 @@ fan-out remain deferred. They require Phase 4 provider isolation first.
 - Autonomous cron jobs.
 - Full Hermes session database replacement.
 - Full-text indexing of every transcript. Revisit after skill and memory usage
-  proves the need; current OpenCLI FTS memory recall is intentionally small.
+  proves the need; current Fenrir Agent FTS memory recall is intentionally small.
 
 ## Priority Order
 

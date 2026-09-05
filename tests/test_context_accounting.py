@@ -6,9 +6,9 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
-from main.cli import OpenCLI
-from main.context_accounting import ContextAccountingService, tiktoken_counter
-from main.model_profiles import FALLBACK_PROFILE, ModelProfileRegistry
+from fenrir_agent.cli import FenrirAgent
+from fenrir_agent.context_accounting import ContextAccountingService, tiktoken_counter
+from fenrir_agent.model_profiles import FALLBACK_PROFILE, ModelProfileRegistry
 
 
 class ModelProfileTests(TestCase):
@@ -42,7 +42,7 @@ class ModelProfileTests(TestCase):
     def test_workspace_override_wins_for_provider_model(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            config = root / ".opencli" / "config.toml"
+            config = root / ".fenrir" / "config.toml"
             config.parent.mkdir()
             config.write_text(
                 '[models."openrouter:vendor/model"]\n'
@@ -122,7 +122,7 @@ class ContextAccountingTests(TestCase):
         self.assertEqual(service.usage.turns, 0)
 
     def test_cli_exposes_context_commands_and_status_indicator(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         self.assertIn("ctx", cli.context_bar())
         with (
             patch.object(cli, "show_context") as show_context,
@@ -137,7 +137,7 @@ class ContextAccountingTests(TestCase):
         show_prompt_size.assert_called_once()
 
     def test_cli_starts_in_local_llama_cpp_workflow(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
 
         self.assertEqual(cli.mode, "auto")
         self.assertIsNone(cli.api_provider)
@@ -163,22 +163,22 @@ class ContextAccountingTests(TestCase):
 
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            config = root / ".opencli" / "config.toml"
+            config = root / ".fenrir" / "config.toml"
             config.parent.mkdir()
             config.write_text(
                 '[models.auto]\ncontext_window = 24576\nmax_output_tokens = 4096\n',
                 encoding="utf-8",
             )
-            cli = OpenCLI(dry_run=True)
+            cli = FenrirAgent(dry_run=True)
             cli.engine = Engine()
             cli.model_profiles = ModelProfileRegistry(root)
-            with patch("main.cli.loading_spinner"):
+            with patch("fenrir_agent.cli.loading_spinner"):
                 self.assertTrue(cli.load_model("auto", "int4", show_picker=False))
 
         self.assertEqual(cli.engine.loaded_context, 24576)
 
     def test_prompt_size_does_not_initialize_model_engine(self):
-        cli = OpenCLI(dry_run=True)
+        cli = FenrirAgent(dry_run=True)
         with (
             patch.object(cli, "ensure_engine") as ensure_engine,
             patch("builtins.print"),
